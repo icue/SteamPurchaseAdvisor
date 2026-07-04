@@ -1,6 +1,6 @@
 ---
 name: evaluate-steam-games
-description: Evaluate one or more specified Steam games before purchase using regional current and historical-low pricing, full or user-approved stratified analysis of Steam reviews without a language filter, recent forum discussions, development-status signals, and a report localized to the configured report country. Use when the user supplies app IDs or game names and asks whether to buy, analyze, compare, or screen those games, or when filter-steam-wishlist hands off resolved app IDs. Requires a connected Steam Review and Forum MCP server; ITAD pricing is optional.
+description: Evaluate one or more specified Steam games before purchase using regional current and historical-low pricing, full or user-approved stratified analysis of Steam reviews without a language filter, recent forum discussions, current product-health signals, conditional Early Access development signals, and a report localized to the configured report country. Use when the user supplies app IDs or game names and asks whether to buy, analyze, compare, or screen those games, or when filter-steam-wishlist hands off resolved app IDs. Requires a connected Steam Review and Forum MCP server; ITAD pricing is optional.
 ---
 
 # Evaluate Steam Games
@@ -61,6 +61,15 @@ Perform this gate once, before ITAD queries or per-game workers.
 
 The MCP client must own the stdio process; never merely launch `npx` in a shell.
 
+After MCP readiness, obtain or reuse `get_steam_game_info` metadata once for every game and derive one release state before preflight or workers:
+
+- `unreleased` when `release_date_coming_soon` is `true`;
+- `early-access` when `release_date_coming_soon` is `false` and the English `genres` array contains the exact value `Early Access`;
+- `full-release` when `release_date_coming_soon` is `false`, `genres` is available, and it does not contain `Early Access`;
+- `unknown` when the required metadata is absent, malformed, or unavailable.
+
+Treat Steam's explicit current metadata as authoritative. Never infer Early Access or abandoned development from version numbers, update cadence, roadmap language, or community assumptions.
+
 ## Select countries, language, and titles
 
 - Use `pricing_country` for ITAD regional prices. Ask for it only when ITAD is configured and the value is missing or invalid.
@@ -90,7 +99,7 @@ Apply the threshold per game, never to a combined total. Lightweight preflight w
 
 ## Coordinate multiple games
 
-After retrieval modes are fixed, use one parallel worker per game when supported; otherwise process sequentially. Pass the app ID, pricing and report countries, exact `report_language`, Steam language code, resolved title, retrieval mode, population count, skill path, and shared ITAD budget. Keep one game's review and forum work in one worker and one report. MCP setup, preflight, and user confirmation remain coordinator responsibilities.
+After retrieval modes are fixed, use one parallel worker per game when supported; otherwise process sequentially. Pass the app ID, pricing and report countries, exact `report_language`, Steam language code, resolved title, release state, reused game metadata, retrieval mode, population count, skill path, and shared ITAD budget. Keep one game's review and forum work in one worker and one report. MCP setup, release-state classification, preflight, and user confirmation remain coordinator responsibilities.
 
 ## Single-game workflow
 
@@ -132,85 +141,202 @@ For either mode:
 - Query at least `review`, `voted_up`, `language`, `timestamp_created`, and `author.playtime_at_review`.
 - Maintain four evidence groups: strengths and weaknesses in positive reviews, and weaknesses and strengths in negative reviews.
 - Weight recurring, recent, cross-language, and higher-playtime observations over isolated anecdotes, then translate or paraphrase them into the report language.
+- Attach `strong`, `moderate`, or `limited` evidence only to review themes when the retrieved material supports that qualitative evidence judgment. Do not use these labels as game-quality ratings. Weight recurrence, recency, cross-language agreement, and higher-playtime observations as specified in the review-analysis workflow.
 - Report population count or unknown, retrieval mode, retrieved counts, observed languages, failures, and material limitations. `language: "all"` removes the language filter but does not guarantee every language appears in a sample.
 - Claim exact theme counts only when counted in the retrieved material.
 
-### 3. Inspect recent discussions and development status
+### 3. Inspect recent discussions and conditional development status
 
-1. Call `list_steam_forum_sections`, then inspect page 1 of the main board and relevant active sections with `list_steam_forum_topics`. Inspect active `eventcomments` for official updates when available.
-2. Treat listing `last_activity_timestamp` and `last_activity_display` only as latest reply or listing activity. For any publication-time claim, open the topic with `get_steam_forum_topic` and use `topic.original_post_timestamp`; report unknown when null. Calculate update gaps only from verified original-post timestamps.
-3. Open enough relevant topics to support claims about bugs, crashes, performance, content, updates, roadmaps, developer communication, servers, and support.
-4. Check for missed roadmaps, unexplained update gaps, developer silence, closure or layoffs, end-of-support or shutdown notices, and repeated unfinished-game complaints.
-5. Separate official evidence from community speculation. Report halted-development risk as `none found`, `low`, `medium`, `high`, or `confirmed`.
-6. Preserve direct source URLs returned for opened topics, official events, announcements, and other evidence. Prefer a direct topic or announcement link over a forum-section or listing link.
+1. Call `list_steam_forum_sections`, then inspect page 1 of the main board and relevant active sections with `list_steam_forum_topics`. Inspect active `eventcomments` for current fixes or operational-support notices when relevant and, for Early Access games, for development progress and roadmap updates.
+2. Treat listing `last_activity_timestamp` and `last_activity_display` only as latest reply or listing activity. For any publication-time claim, open the topic with `get_steam_forum_topic` and use `topic.original_post_timestamp`; report unknown when null. When an Early Access update gap is material, calculate it only from verified original-post timestamps.
+3. For every game, open enough relevant topics to support claims about current bugs, crashes, performance, content condition, servers, shutdowns, and operational support.
+4. For `early-access` games, also inspect roadmap progress, verified update gaps, developer communication, closure or layoffs, end-of-development notices, and repeated unfinished-game complaints. Calculate update gaps only from verified original-post timestamps.
+5. For `full-release` games, treat sparse or absent updates as neutral. Do not search for or report routine update gaps, developer silence, missed roadmaps, or halted-development risk. When ongoing servers or support materially affect use of the purchased product, report verified availability, degradation, or shutdown evidence under current issues rather than as halted development.
+6. For `unknown` or `unreleased` release states, omit Early Access-only development judgments. State the metadata gap when it materially limits the recommendation.
+7. Separate official evidence from community speculation. Only for `early-access` games, report halted-development risk as `none found`, `low`, `medium`, `high`, or `confirmed`.
+8. Preserve direct source URLs returned for opened topics, official events, announcements, and other evidence. Prefer a direct topic or announcement link over a forum-section or listing link.
 
 If individual forum calls fail while MCP remains healthy, mark forum coverage partial and continue.
 
 ### 4. Produce the localized report
 
-Include Markdown source links wherever a reliable URL is available, placing each link near the claim it supports. Prioritize links in `Recent community and development status`, especially for official updates, roadmaps, support or shutdown notices, and representative bug or performance discussions. Never invent, guess, or reconstruct a source URL; leave evidence unlinked when no reliable URL is available.
+Include Markdown source links wherever a reliable URL is available, placing each link near the claim it supports. Prioritize links in `🛠️ Is the game healthy right now?`, especially for representative bug or performance discussions, operational support or shutdown notices, and—only for Early Access games—official updates and roadmaps. Never invent, guess, or reconstruct a source URL; leave evidence unlinked when no reliable URL is available.
 
-The following English template is a semantic schema, not literal output:
+The following English template is a semantic schema, not literal output. Preserve the section order and the separation between game fit, product state, deal value, and evidence confidence, but omit unsupported or non-material optional findings rather than filling space.
+
+Use emoji selectively as visual navigation and status reinforcement. Emoji must never replace the accompanying text label, status, or explanation and must not introduce a second analytical classification system.
 
 ```markdown
-# [Game title](https://store.steampowered.com/app/<appid>/)
-[SteamDB](https://steamdb.info/app/<appid>/)
+# [Localized game title](https://store.steampowered.com/app/<appid>/)
 
-## Purchase recommendation
-- Recommendation: buy now / wait for a lower price / wait and reassess / do not buy
-- Confidence: high / medium / low
-- One-sentence rationale: ...
+`App <appid>` · **Early Access** · [SteamDB](https://steamdb.info/app/<appid>/) · Evidence checked: YYYY-MM-DD
 
-## Price signal
-- Current price: ... / unavailable
-- Regular price: ... / unavailable
-- Discount rate: ... / unavailable
-- Historical-low reference price: ... / unavailable
-- Historical-low status: matches recorded low / establishes a new low / above recorded low / unavailable
-- Interpretation: ...
+[Include the localized `Early Access` label and its preceding separator only when release state is `early-access`. Omit both for `full-release`, `unreleased`, or `unknown`.]
 
-## All-language review analysis
-- Coverage: population total or unknown, full or stratified-sample mode, retrieved counts, observed languages, and limitations
-- Main strengths: ...
-- Weaknesses mentioned in positive reviews: ...
-- Main weaknesses: ...
-- Strengths mentioned in negative reviews: ...
-- Consensus and disagreements: ...
+> [Coverage notice only when materially relevant: recent sentiment-stratified sample / partial forum coverage / price data unavailable / unknown release state that affects the decision / other decision-relevant limitation.]
 
-## Recent community and development status
-- Recent discussions: ...
-- Halted-development risk: none found / low / medium / high / confirmed
-- Evidence: ...
+## 🎯 Decision
 
-## Suitable and unsuitable players
-- Suitable for: ...
-- Not suitable for: ...
+**Recommendation:** 🟢 Buy now / 🟡 Wait for a lower price / 🟡 Wait and reassess / 🔴 Do not buy
 
-## Final assessment
-...
+**Why:** [One sentence identifying the main reason for the recommendation and the most important condition or caveat.]
 
-## Explore further
-Do you want to know:
-- ...
+| Signal | Assessment | Reason |
+|---|---|---|
+| **Game fit** | Broad / Taste-dependent / Niche / Unclear | [Who tends to enjoy or reject the core experience, based on review evidence.] |
+| **Product state** | Healthy / Watch / Risky / Unknown | [What the current technical, content, or operational support condition means for a buyer; include development condition only for Early Access.] |
+| **Deal value** | Strong / Fair / Weak / Unknown | [Whether available price evidence supports paying the current price.] |
+
+**Confidence:** High / Medium / Low — [Brief evidence-coverage reason.]
+
+**Buy if:** [Concrete player preference, tolerance, or use case that supports purchasing.]
+
+**Wait or skip if:** [Concrete deal-breaker, active product issue, or price condition.]
+
+## ⚠️ Before you buy
+
+- **[Most important regret risk]:** [Explain the practical consequence and who should care.]
+- **[Second decision-relevant fact]:** [Explain what this means for the buyer.]
+- **[Third decision-relevant fact]:** [Explain what this means for the buyer.]
+
+[Use no more than three items. Omit weak or redundant findings.]
+
+## 🎮 Is this game for you?
+
+| ✅ You'll probably enjoy it if... | ⚠️ Think twice if... |
+|---|---|
+| [Concrete supported preference or playstyle.] | [Specific recurring source of frustration.] |
+| [Concrete supported tolerance or expectation.] | [Expectation the game consistently fails to meet.] |
+| [Playtime-sensitive or subgroup finding when supported.] | [Relevant sensitivity to a current product issue.] |
+
+## 💬 What players actually say
+
+### What players love
+
+- **[Theme] — Strong / Moderate / Limited evidence:** [Translate the recurring strength into what the player actually experiences or gains.]
+- **[Theme] — Strong / Moderate / Limited evidence:** [Buyer consequence.]
+- **[Theme] — Strong / Moderate / Limited evidence:** [Buyer consequence.]
+
+### What players criticize
+
+- **[Theme] — Strong / Moderate / Limited evidence:** [Translate the recurring weakness into its practical effect on the player.]
+- **[Theme] — Strong / Moderate / Limited evidence:** [Buyer consequence.]
+- **[Theme] — Strong / Moderate / Limited evidence:** [Buyer consequence.]
+
+### Even fans admit
+
+[Weaknesses that recur in positive reviews. Explain why satisfied owners still notice them and, when supported, why they tolerate them.]
+
+### Even critics concede
+
+[Strengths that recur in negative reviews despite the reviewers ultimately not recommending the game.]
+
+### Where players disagree
+
+[Describe genuine disagreements between positive and negative reviewers. State the supported context behind the split, such as playtime, expectations, or another observed factor, when the evidence supports it.]
+
+## 🛠️ Is the game healthy right now?
+
+| Signal | Status | What it means |
+|---|---|---|
+| **Current issues** | Clear / Watch / Concerning / Unknown | [Short buyer consequence based on current recurring product issues.] |
+| **Developer activity** | Active / Sparse / Silent / Unknown | [Early Access only: short factual summary of verified update or communication activity. Omit this row otherwise.] |
+| **Halted-development risk** | None found / Low / Medium / High / Confirmed | [Early Access only: short purchasing consequence. Omit this row otherwise.] |
+
+**What is happening now:** [Explain current recurring bugs, crashes, performance problems, server concerns, unfinished-content complaints, or that no recurring issue was found in the inspected material. Add direct source links near supported forum claims.]
+
+**What the developer is doing:** [Early Access only: explain recent verified official activity, communication patterns, roadmap information, or gaps. Use exact dates for publication-time claims and add direct source links where available. Omit this paragraph otherwise.]
+
+**What the evidence means:** [Separate verified official evidence from repeated owner reports and community speculation. Explain the practical purchasing consequence.]
+
+## 💰 Is the price right?
+
+| Price signal | Value |
+|---|---|
+| **Now** | ... / Unavailable |
+| **Regular price** | ... / Unavailable |
+| **Discount** | ... / Unavailable |
+| **Recorded low** | ... / Unavailable |
+| **Compared with recorded low** | ✅ Matches recorded low / 🔽 Establishes a new low / ⬆️ Above recorded low / Unavailable |
+
+**Buy timing:** [One plain-language transaction judgment. Explain whether available price evidence supports buying now, waiting for a lower price, or provides insufficient information for confident timing advice. Do not let a historical low override material game-fit or product-state concerns.]
+
+## Evidence and limitations
+
+| Evidence | Coverage |
+|---|---|
+| **Review population** | ... total / Unknown |
+| **Retrieval mode** | Full / Recent sentiment-stratified sample |
+| **Reviews retrieved** | ... [total, or positive and negative corpus counts as applicable] |
+| **Languages observed** | ... |
+| **Review limitations** | [Sampling design, corpus failure, incomplete population comparison, or other material limitation.] |
+| **Forum coverage** | [Sections and relevant material inspected; note partial failures.] |
+| **Price coverage** | IsThereAnyDeal regional pricing for [country] / Unavailable — [reason] |
+
+**What the gaps prevent me from concluding:** [State exactly which conclusion, if any, cannot be made confidently because of missing evidence.]
+
+## 🔍 Explore further
+
+- [Compact question tied to a specific finding, disagreement, uncertainty, or evidence gap?]
+- [Compact question tied to another review, forum, development, event-comment, or metadata finding?]
 ```
 
 Base recommendations on all available evidence. A historical low does not by itself justify purchase. Preserve the four review evidence groups and state material gaps. Without price data, avoid confident buy-now or wait-for-lower-price timing claims unless the user supplied another explicit source. In sampled mode, identify the design prominently and calibrate confidence to consistency and coverage, not the sampled sentiment ratio.
 
+Treat the report as a buyer's guide rather than an analysis transcript:
+
+* Use buyer-facing section names and explain findings through their practical purchasing consequences.
+* Keep the underlying distinctions between game fit, product state, deal value, and evidence confidence explicit in the `🎯 Decision` section.
+* Do not convert the decision signals into numeric scores or a hidden aggregate rating.
+* Do not add a separate final verdict. The `🎯 Decision` section is the conclusion; later sections explain the evidence behind it.
+* Use tables for compact, directly comparable facts or statuses. Keep nuanced review findings and decision-relevant caveats in prose or bullets.
+* Use emoji only for major section navigation, recommendation reinforcement, fit-table orientation, and factual position-versus-recorded-low reinforcement.
+* Emoji must accompany explicit text. Never use emoji alone to communicate a recommendation, status, risk level, evidence strength, or price conclusion.
+* Do not add traffic-light emoji to `Game fit`, `Product state`, `Deal value`, `Current issues`, `Developer activity`, `Halted-development risk`, or review evidence-strength labels. Their textual taxonomies are authoritative.
+* Do not decorate ordinary review bullets, evidence rows, source links, or methodology fields with emoji.
+* Do not manufacture a fixed number of strengths, weaknesses, fit conditions, or risks. Omit weak, unsupported, or non-material findings.
+* Keep `⚠️ Before you buy` to the findings most likely to cause buyer's remorse or materially change the purchase decision. Do not repeat findings there solely because they appear later in the report.
+* For review findings, preserve all four evidence groups internally: strengths in positive reviews, weaknesses in positive reviews, weaknesses in negative reviews, and strengths in negative reviews. Translate them into `What players love`, `What players criticize`, `Even fans admit`, and `Even critics concede`.
+* Attach `strong`, `moderate`, or `limited evidence` only to review themes when the retrieved material supports that qualitative evidence judgment. These labels describe evidence, not game quality.
+* Translate each material review theme into a buyer consequence. Prefer `recurring stutter makes the current build a poor fit for frame-sensitive players` over `performance issues`.
+* In `Where players disagree`, state a reason for the split only when the retrieved evidence supports that context. Do not invent explanations from genre assumptions.
+* In the `🎮 Is this game for you?` table, do not force the two columns into opposites or paired comparisons. Each cell is an independent supported fit condition. Leave a cell blank when the columns contain different numbers of material findings.
+* In `🛠️ Is the game healthy right now?`, describe the current inspected state and its purchasing consequence. Do not predict that a game will remain healthy for a specific future period.
+* Use the derived release state consistently across evidence collection, the decision card, the health section, and exploration questions. Do not let a worker reclassify it from forum activity.
+* For `full-release` games, base `Product state` on current technical, content, server, and operational-support evidence. Treat a lack of recent patches or developer posts as neutral and never use it alone to lower `Product state`, recommendation, or confidence.
+* For a `full-release` game with a material online or service dependency, report verified server availability, support degradation, or shutdown evidence under `Current issues` and `What is happening now`; do not convert it into a developer-activity or halted-development judgment.
+* For `unknown` release state, omit the Early Access label, `Developer activity`, `Halted-development risk`, and `What the developer is doing`. Show a coverage notice only when that uncertainty weakens a decision-relevant conclusion.
+* Classify `Current issues` as `clear`, `watch`, `concerning`, or `unknown`:
+
+  * `clear` when no recurring purchase-relevant issue was found in adequately inspected current material;
+  * `watch` when issues exist but appear limited, conditional, or actively mitigated;
+  * `concerning` when recurring current issues can materially affect purchase suitability;
+  * `unknown` when coverage is insufficient.
+* Only for `early-access` games, classify `Developer activity` as `active`, `sparse`, `silent`, or `unknown`. This describes verified update or communication activity only and is not itself a product-health rating.
+* Preserve the exact price inputs and historical-low semantics from the pricing workflow. The buyer-facing table labels `Now`, `Regular price`, `Discount`, `Recorded low`, and `Compared with recorded low` map respectively to `current_price`, `regular_price`, `discount_percent`, `historical_low_price`, and the required current-versus-historical-low comparison.
+* In the price table, `✅`, `🔽`, and `⬆️` only reinforce the explicit recorded-low comparison text. They do not represent overall deal quality or the purchase recommendation.
+* `Buy timing` must remain separate from whether the underlying game is a good fit or the current product state is healthy.
+* Only for `early-access` games, report halted-development risk as `none found`, `low`, `medium`, `high`, or `confirmed`. Separate official evidence from owner reports and community speculation. Omit the field for every other release state.
+* Partial forum coverage must not be presented as evidence that no problem exists. Prefer `no recurring issue was found in the inspected material` when that is the strongest supported statement.
+* Show a coverage notice below the title when the report uses a recent sentiment-stratified sample or when a decision-relevant source is materially incomplete.
+* Keep material evidence limitations visible in the coverage notice and `🎯 Decision` section when they affect the recommendation. The collapsed `Evidence and limitations` section provides audit detail; it must not be used to hide decision-relevant uncertainty.
+* State exactly which conclusion a material evidence gap weakens or prevents rather than lowering all confidence indiscriminately.
+
 Before delivery, the coordinator must enforce the exact runtime `report_language` across worker output:
 
-- Localize every heading, label, status value, explanation, limitation, evidence summary, and exploration question.
-- Translate or paraphrase foreign review and forum material; do not mix untranslated sentences or raw quotes into the body.
-- Preserve official game titles, company and personal names, URLs, currency codes, and necessary established acronyms. Use the resolved localized title when available and the official original title otherwise.
-- Localize ordinary template and genre terms; English tokens such as `Recommendation`, `high`, `Full mode`, `Bug`, and `Explore further` must not remain in a non-English report unless part of a proper name or code.
-- Audit the final report line by line before delivery.
+* Localize every heading, table header, table status value, label, explanation, limitation, evidence summary, and exploration question.
+* Translate or paraphrase foreign review and forum material; do not mix untranslated sentences or raw quotes into the body.
+* Preserve official game titles, company and personal names, URLs, currency codes, and necessary established acronyms. Use the resolved localized title when available and the official original title otherwise.
+* Preserve the template's navigation and reinforcement emoji unless the output environment cannot render them reliably. Localize the accompanying text naturally.
+* Localize ordinary template and genre terms; English tokens such as `Recommendation`, `high`, `Full mode`, `Bug`, and `Explore further` must not remain in a non-English report unless part of a proper name or code.
+* Localize buyer-facing phrases naturally rather than translating headings word for word when a more idiomatic equivalent exists.
+* Audit the final report line by line before delivery.
 
-End each report with a naturally localized, action-oriented `Explore further` heading:
+End each report with a naturally localized, action-oriented `🔍 Explore further` heading:
 
-- Ask one compact question per line, preferably two for one game and one per game in a multi-game response; never exceed three or roughly 12 English words per question.
-- Tie each question to a finding, disagreement, uncertainty, or gap and offer only MCP-supported review, forum, development-activity, event-comment, or metadata exploration.
-- Do not repeat answered questions or offer price research, alerts, external research, benchmarks, or monitoring.
-
-Examples: `Did recent patches fix the reported stuttering?`; `Does repetition vary by playtime?`; `Any recent roadmap activity?`
+* Ask one compact question per line; never exceed 12 English words per question.
+* Tie each question to a finding, disagreement, uncertainty, or gap and offer only MCP-supported review, forum, event-comment, or metadata exploration. Offer development-activity or roadmap exploration only for verified Early Access games; for full releases, offer operational-support exploration only when continued service materially affects the purchase.
+* Do not repeat answered questions or offer price research, alerts, external research, benchmarks, or monitoring.
 
 ## Respect the ITAD request limit
 

@@ -8,14 +8,15 @@ Steam Purchase Advisor is a Skills bundle for filtering public Steam wishlists a
 
 | Skill | Purpose |
 | --- | --- |
-| [filter-steam-wishlist](.agents/skills/filter-steam-wishlist/SKILL.md) | Lists a public wishlist, optionally filters it by sale or historical-low status. |
-| [evaluate-steam-games](.agents/skills/evaluate-steam-games/SKILL.md) | Produces reports from Steam reviews, recent forum activity and development signals. |
+| [filter-steam-wishlist](.agents/skills/filter-steam-wishlist/SKILL.md) | Lists a public wishlist, optionally filters it by sale, historical-low, Early Access, or full-release status. |
+| [evaluate-steam-games](.agents/skills/evaluate-steam-games/SKILL.md) | Produces reports from Steam reviews, recent forum activity, current product health, and Early Access development signals. |
 
 ## Example prompts
 
 - “List my Steam wishlist.”
-- “Show my wishlisted games currently on sale.”
 - “Show my wishlisted games currently matching or beating their historical low.”
+- “Show my Early Access wishlist games currently on sale.”
+- “Show all fully released games on my wishlist.”
 - “Should I buy Steam game XXX now?”
 - “Evaluate all my wishlisted games currently on sale.”
 
