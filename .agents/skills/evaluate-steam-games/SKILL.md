@@ -133,10 +133,13 @@ For either mode:
 3. Open enough relevant topics to support claims about bugs, crashes, performance, content, updates, roadmaps, developer communication, servers, and support.
 4. Check for missed roadmaps, unexplained update gaps, developer silence, closure or layoffs, end-of-support or shutdown notices, and repeated unfinished-game complaints.
 5. Separate official evidence from community speculation. Report halted-development risk as `none found`, `low`, `medium`, `high`, or `confirmed`.
+6. Preserve direct source URLs returned for opened topics, official events, announcements, and other evidence. Prefer a direct topic or announcement link over a forum-section or listing link.
 
 If individual forum calls fail while MCP remains healthy, mark forum coverage partial and continue.
 
 ### 4. Produce the localized report
+
+Include Markdown source links wherever a reliable URL is available, placing each link near the claim it supports. Prioritize links in `Recent community and development status`, especially for official updates, roadmaps, support or shutdown notices, and representative bug or performance discussions. Never invent, guess, or reconstruct a source URL; leave evidence unlinked when no reliable URL is available.
 
 The following English template is a semantic schema, not literal output:
 
@@ -178,6 +181,7 @@ The following English template is a semantic schema, not literal output:
 ...
 
 ## Explore further
+Do you want to know:
 - ...
 ```
 
