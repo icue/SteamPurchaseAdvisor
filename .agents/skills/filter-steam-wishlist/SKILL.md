@@ -21,6 +21,8 @@ Resolve paths relative to this `SKILL.md`:
 - Wishlist script: `scripts/get_wishlist_appids.py`
 - Repository root: three directories above this skill directory
 - Config status helper: `<repo-root>/.agents/lib/steam_purchase_advisor/config_status.py`
+- Config update helper: `<repo-root>/.agents/lib/steam_purchase_advisor/update_config.py`
+- Steam identity helper: `<repo-root>/.agents/lib/steam_purchase_advisor/steam_identity.py`
 - Title resolver: `<repo-root>/.agents/lib/steam_purchase_advisor/resolve_steam_titles.py`
 - User config: `<repo-root>/config.json`
 
@@ -30,7 +32,7 @@ At the start of every wishlist request, run:
 python -B <repo-root>/.agents/lib/steam_purchase_advisor/config_status.py
 ```
 
-The helper exposes only configuration presence, field errors, countries, and whether the ITAD key exists. Use it for identity, localization, and pricing decisions even in unfiltered mode. Never open `config.json` directly or print, quote, or expose `itad_api_key`. A Steam profile identifier or country supplied in the current request overrides config for that request only; never persist an override automatically.
+The helper exposes only configuration presence, field errors, countries, and whether the ITAD key exists. Use it for identity, localization, and pricing decisions even in unfiltered mode. When every field needed by the request is valid, do not mention configuration, ask configuration questions, or run the update helper. Never open `config.json` directly or print, quote, or expose `itad_api_key`. A Steam profile identifier or country supplied in the current request overrides config for that request only; never persist an override automatically.
 
 ## Guide first-use configuration
 
@@ -41,15 +43,21 @@ When `config.json` is absent or a relevant field is missing or invalid:
    - `report_country`: required for title localization; use an uppercase ISO 3166-1 alpha-2 code and ask for a language when the country is multilingual.
    - `pricing_country`: required only for ITAD filtering.
    - `itad_api_key`: optional; without it, return the complete unfiltered wishlist and state that price filters were not applied.
-2. Resolve request-supplied Steam identity input before discussing persistence. Store only the resolved 17-digit SteamID64, never the custom ID or URL.
-3. Offer one combined confirmation to create or repair only the missing or invalid non-secret fields. Include `steam_id` only when `steam_id_configured` is false. If it is already configured, keep request-supplied identity input temporary and do not offer replacement unless the user explicitly asks to replace it.
-4. After confirmation, use the bundled script's secret-safe update mode; pass the resolved numeric ID, not a custom ID or URL:
+2. Resolve request-supplied Steam identity input before discussing persistence:
 
 ```text
-python -B <skill-dir>/scripts/get_wishlist_appids.py --update-config-only [--steam-profile <STEAMID64>] [--report-country <CC>] [--country <CC>]
+python -B <repo-root>/.agents/lib/steam_purchase_advisor/steam_identity.py --steam-profile <STEAMID64-OR-PROFILE>
 ```
 
-The update mode creates the standard shape when absent, preserves `itad_api_key` and unrelated settings internally, writes atomically, emits only status booleans and field names rather than configuration values, and refuses to replace valid existing fields. Use `--replace-existing` only after the user explicitly requests replacement and separately confirms the exact field names. Rerun the status helper after any update. If the user declines persistence, continue with request-only overrides and do not ask again during that request.
+   Use the returned `steam_id` for the request and any save offer. Store only the resolved 17-digit SteamID64, never the custom ID or URL.
+3. Offer one combined confirmation to create or repair only the missing or invalid non-secret fields. Include `steam_id` only when `steam_id_configured` is false. If it is already configured, keep request-supplied identity input temporary and do not offer replacement unless the user explicitly asks to replace it.
+4. After confirmation, use the shared secret-safe update helper; pass the resolved numeric ID, not a custom ID or URL:
+
+```text
+python -B <repo-root>/.agents/lib/steam_purchase_advisor/update_config.py [--steam-id <STEAMID64>] [--report-country <CC>] [--pricing-country <CC>]
+```
+
+The helper creates the standard shape when absent, preserves `itad_api_key` and unrelated settings internally, writes atomically, emits only status booleans and field names rather than configuration values, and refuses to replace valid existing fields. Use `--replace-existing` only after the user explicitly requests replacement and separately confirms the exact field names. Rerun the status helper after any update. If the user declines persistence, continue with request-only overrides and do not ask again during that request.
 
 To obtain an ITAD key, direct the user to `https://isthereanydeal.com/apps/` to sign in, register an app, and edit the key into local config themselves. These scripts do not use the OAuth Client ID or Client Secret. Link `https://docs.isthereanydeal.com/` for API documentation. Never request the key in chat or on the command line; rerun the status helper afterward and report the key only as configured or not configured.
 

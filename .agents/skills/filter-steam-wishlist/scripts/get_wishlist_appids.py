@@ -2,29 +2,21 @@
 
 import argparse
 import json
-import os
 import sys
-import tempfile
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, unquote, urlencode, urlparse
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from xml.etree import ElementTree
 
 
 SHARED_LIB = Path(__file__).resolve().parents[3] / "lib"
 sys.path.insert(0, str(SHARED_LIB))
 
 from steam_purchase_advisor.config import (  # noqa: E402
-    CONFIG_PATH,
-    AppConfig,
     ConfigError,
     ConfigValueError,
     load_config,
-    normalize_country,
-    normalize_steam_id,
 )
 from steam_purchase_advisor.itad_client import (  # noqa: E402
     BATCH_SIZE,
@@ -35,17 +27,13 @@ from steam_purchase_advisor.itad_client import (  # noqa: E402
     parse_country_argument,
     post,
 )
+from steam_purchase_advisor.steam_identity import (  # noqa: E402
+    SteamIdentityResolutionError,
+    resolve_steam_profile,
+)
 
 
 WISHLIST_URL = "https://api.steampowered.com/IWishlistService/GetWishlist/v1/"
-STEAM_COMMUNITY_HOSTS = {"steamcommunity.com", "www.steamcommunity.com"}
-STEAM_PROFILE_XML_MAX_BYTES = 1_000_000
-DEFAULT_CONFIG: dict[str, str] = {
-    "steam_id": "",
-    "itad_api_key": "",
-    "pricing_country": "",
-    "report_country": "",
-}
 
 
 class WishlistUnavailableError(RuntimeError):
@@ -54,259 +42,6 @@ class WishlistUnavailableError(RuntimeError):
     def __init__(self, reason: str, message: str) -> None:
         self.reason = reason
         super().__init__(message)
-
-
-class SteamIdentityResolutionError(RuntimeError):
-    """Raised when a Steam profile reference cannot be resolved to SteamID64."""
-
-    def __init__(self, reason: str, message: str) -> None:
-        self.reason = reason
-        super().__init__(message)
-
-
-class ConfigUpdateConflict(RuntimeError):
-    """Raised when an update would replace a valid configured value."""
-
-    def __init__(self, fields: list[str]) -> None:
-        self.fields = fields
-        super().__init__("Refusing to replace already configured fields without approval.")
-
-
-def normalize_vanity_id(value: str) -> str:
-    """Validate one exact Steam custom-profile path segment."""
-    vanity_id = value.strip()
-    if (
-        not vanity_id
-        or len(vanity_id) > 128
-        or any(
-            character.isspace()
-            or character in "/\\?#"
-            or ord(character) < 32
-            for character in vanity_id
-        )
-    ):
-        raise SteamIdentityResolutionError(
-            "invalid_steam_profile",
-            "Steam custom IDs must be exact, non-empty profile path values.",
-        )
-    return vanity_id
-
-
-def parse_steam_profile_reference(value: str) -> tuple[str, str]:
-    """Return ('steam_id', value) or ('vanity_id', value) for supported input."""
-    profile_reference = value.strip()
-    if not profile_reference:
-        raise SteamIdentityResolutionError(
-            "invalid_steam_profile",
-            "A SteamID64, Steam profile URL, or exact custom ID is required.",
-        )
-
-    try:
-        return "steam_id", normalize_steam_id(profile_reference)
-    except ValueError:
-        pass
-
-    candidate_url = profile_reference
-    if profile_reference.lower().startswith(
-        ("steamcommunity.com/", "www.steamcommunity.com/")
-    ):
-        candidate_url = f"https://{profile_reference}"
-
-    parsed = urlparse(candidate_url)
-    if parsed.scheme or parsed.netloc:
-        if (
-            parsed.scheme.lower() not in {"http", "https"}
-            or parsed.hostname is None
-            or parsed.hostname.lower() not in STEAM_COMMUNITY_HOSTS
-            or parsed.username is not None
-            or parsed.password is not None
-        ):
-            raise SteamIdentityResolutionError(
-                "invalid_steam_profile",
-                "Only Steam Community profile URLs are supported.",
-            )
-
-        path_parts = [unquote(part) for part in parsed.path.split("/") if part]
-        if len(path_parts) != 2:
-            raise SteamIdentityResolutionError(
-                "invalid_steam_profile",
-                "Steam profile URLs must use /profiles/<SteamID64> or /id/<custom-id>.",
-            )
-
-        profile_kind, profile_value = path_parts
-        if profile_kind.lower() == "profiles":
-            try:
-                return "steam_id", normalize_steam_id(profile_value)
-            except ValueError as exc:
-                raise SteamIdentityResolutionError(
-                    "invalid_steam_profile",
-                    "The Steam Community /profiles/ URL does not contain a valid SteamID64.",
-                ) from exc
-        if profile_kind.lower() == "id":
-            return "vanity_id", normalize_vanity_id(profile_value)
-        raise SteamIdentityResolutionError(
-            "invalid_steam_profile",
-            "Steam profile URLs must use /profiles/<SteamID64> or /id/<custom-id>.",
-        )
-
-    return "vanity_id", normalize_vanity_id(profile_reference)
-
-
-def resolve_steam_profile(value: str) -> str:
-    """Resolve a supported Steam profile reference to a validated SteamID64."""
-    reference_kind, reference_value = parse_steam_profile_reference(value)
-    if reference_kind == "steam_id":
-        return reference_value
-
-    profile_url = (
-        "https://steamcommunity.com/id/"
-        f"{quote(reference_value, safe='')}/?xml=1"
-    )
-    request = Request(
-        profile_url,
-        headers={
-            "Accept": "application/xml, text/xml;q=0.9, */*;q=0.1",
-            "User-Agent": USER_AGENT,
-        },
-    )
-    try:
-        with urlopen(request, timeout=30) as response:
-            payload = response.read(STEAM_PROFILE_XML_MAX_BYTES + 1)
-    except HTTPError as exc:
-        raise SteamIdentityResolutionError(
-            "steam_profile_http_error",
-            f"Steam did not resolve the custom profile (HTTP {exc.code}).",
-        ) from exc
-    except (URLError, TimeoutError, OSError) as exc:
-        raise SteamIdentityResolutionError(
-            "steam_profile_request_failed",
-            "The Steam custom-profile lookup failed.",
-        ) from exc
-
-    if len(payload) > STEAM_PROFILE_XML_MAX_BYTES:
-        raise SteamIdentityResolutionError(
-            "steam_profile_invalid_response",
-            "Steam returned an unexpectedly large custom-profile response.",
-        )
-
-    try:
-        profile = ElementTree.fromstring(payload)
-    except ElementTree.ParseError as exc:
-        raise SteamIdentityResolutionError(
-            "steam_profile_invalid_response",
-            "Steam returned invalid custom-profile XML.",
-        ) from exc
-
-    steam_id = profile.findtext(".//steamID64")
-    if steam_id is None:
-        raise SteamIdentityResolutionError(
-            "steam_profile_not_resolved",
-            "Steam did not return a numeric ID for that exact custom profile.",
-        )
-    try:
-        return normalize_steam_id(steam_id)
-    except ValueError as exc:
-        raise SteamIdentityResolutionError(
-            "steam_profile_invalid_response",
-            "Steam returned an invalid SteamID64 for the custom profile.",
-        ) from exc
-
-
-def normalize_config_updates(updates: dict[str, str]) -> dict[str, str]:
-    """Validate and normalize every supported non-secret update."""
-    normalized: dict[str, str] = {}
-    for field, value in updates.items():
-        if not isinstance(value, str):
-            raise ValueError(f"{field} must be a string")
-        if field == "steam_id":
-            normalized[field] = normalize_steam_id(value)
-        elif field in {"pricing_country", "report_country"}:
-            normalized[field] = normalize_country(value)
-        else:
-            raise ValueError(f"Unsupported configuration field: {field}")
-    if not normalized:
-        raise ValueError("At least one configuration field is required")
-    return normalized
-
-
-def current_valid_config_value(config: AppConfig, field: str) -> str | None:
-    """Read one validated field, treating an invalid value as unconfigured."""
-    try:
-        return getattr(config, field)
-    except ConfigValueError:
-        return None
-
-
-def write_config_atomically(path: Path, data: dict[str, Any]) -> None:
-    """Write JSON beside the target and atomically replace it."""
-    temporary_path: Path | None = None
-    try:
-        descriptor, temporary_name = tempfile.mkstemp(
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            text=True,
-        )
-        temporary_path = Path(temporary_name)
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump(data, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
-        temporary_path = None
-    except OSError as exc:
-        raise ConfigError(
-            "config_write_failed",
-            f"Could not safely write configuration at {path}.",
-        ) from exc
-    finally:
-        if temporary_path is not None:
-            try:
-                temporary_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-
-def update_config(
-    path: Path,
-    updates: dict[str, str],
-    *,
-    replace_existing: bool = False,
-) -> dict[str, object]:
-    """Merge approved fields while preserving secrets and unrelated settings."""
-    normalized_updates = normalize_config_updates(updates)
-    config = load_config(path)
-    config_created = not path.is_file()
-
-    conflicts: list[str] = []
-    updated_fields: list[str] = []
-    unchanged_fields: list[str] = []
-    for field, value in normalized_updates.items():
-        current = current_valid_config_value(config, field)
-        if current == value:
-            unchanged_fields.append(field)
-        elif current is not None and not replace_existing:
-            conflicts.append(field)
-        else:
-            updated_fields.append(field)
-
-    if conflicts:
-        raise ConfigUpdateConflict(conflicts)
-
-    if config_created or updated_fields:
-        merged: dict[str, Any] = dict(DEFAULT_CONFIG)
-        merged.update(config.data)
-        for field in updated_fields:
-            merged[field] = normalized_updates[field]
-        write_config_atomically(path, merged)
-
-    return {
-        "config_created": config_created,
-        "config_updated": bool(updated_fields),
-        "updated_fields": updated_fields,
-        "unchanged_fields": unchanged_fields,
-    }
 
 
 def emit_error(error: str, reason: str, message: str, **details: object) -> None:
@@ -442,10 +177,7 @@ def get_historical_low_sale_appids(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description=(
-            "Return app IDs from a public Steam wishlist or safely update "
-            "approved non-secret configuration fields."
-        )
+        description="Return app IDs from a public Steam wishlist."
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
@@ -465,35 +197,15 @@ def main() -> int:
         dest="steam_profile",
         help=(
             "SteamID64, Steam Community profile URL, or exact custom ID for this "
-            "request, or identity to save with --update-config-only."
+            "request."
         ),
     )
     parser.add_argument(
         "--country",
         type=parse_country_argument,
-        help="Pricing country for this request, or to save with --update-config-only.",
-    )
-    parser.add_argument(
-        "--report-country",
-        type=parse_country_argument,
-        help="Report country to save with --update-config-only.",
-    )
-    parser.add_argument(
-        "--update-config-only",
-        action="store_true",
-        help="Safely update approved config fields and exit without fetching a wishlist.",
-    )
-    parser.add_argument(
-        "--replace-existing",
-        action="store_true",
-        help="Replace valid config values after separate explicit user confirmation.",
+        help="Pricing country for this request.",
     )
     args = parser.parse_args()
-
-    if args.replace_existing and not args.update_config_only:
-        parser.error("--replace-existing requires --update-config-only")
-    if args.report_country and not args.update_config_only:
-        parser.error("--report-country requires --update-config-only")
 
     resolved_request_steam_id: str | None = None
     if args.steam_profile:
@@ -510,49 +222,6 @@ def main() -> int:
                 ),
             )
             return 2
-
-    if args.update_config_only:
-        updates = {
-            field: value
-            for field, value in {
-                "steam_id": resolved_request_steam_id,
-                "pricing_country": args.country,
-                "report_country": args.report_country,
-            }.items()
-            if value is not None
-        }
-        if not updates:
-            emit_error(
-                "configuration_not_updated",
-                "missing_update_fields",
-                (
-                    "Provide at least one of --steam-profile, --country, or "
-                    "--report-country with --update-config-only."
-                ),
-            )
-            return 2
-        try:
-            result = update_config(
-                CONFIG_PATH,
-                updates,
-                replace_existing=args.replace_existing,
-            )
-        except ConfigUpdateConflict as exc:
-            emit_error(
-                "configuration_not_updated",
-                "fields_already_configured",
-                str(exc),
-                fields=exc.fields,
-            )
-            return 3
-        except ConfigError as exc:
-            emit_error("configuration_not_updated", exc.code, str(exc))
-            return 2
-        except ValueError as exc:
-            emit_error("configuration_not_updated", "invalid_update", str(exc))
-            return 2
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
 
     try:
         config = load_config()

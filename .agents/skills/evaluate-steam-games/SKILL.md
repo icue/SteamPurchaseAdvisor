@@ -19,16 +19,31 @@ Produce one localized purchase report per specified game. SteamID and wishlist v
 1. Accept one or more app IDs, game names, or IDs handed off by another skill.
 2. Resolve a game name from its canonical Steam Store URL (`/app/<appid>/`), preferring the official result. Ask when multiple games remain plausible.
 3. Resolve `scripts/historical_low_checker.py` relative to this `SKILL.md` and the repository root three directories above the skill directory.
-4. Resolve the config helper at `<repo-root>/.agents/lib/steam_purchase_advisor/config_status.py` and title resolver at `<repo-root>/.agents/lib/steam_purchase_advisor/resolve_steam_titles.py`.
+4. Resolve the config status helper at `<repo-root>/.agents/lib/steam_purchase_advisor/config_status.py`, config update helper at `<repo-root>/.agents/lib/steam_purchase_advisor/update_config.py`, title resolver at `<repo-root>/.agents/lib/steam_purchase_advisor/resolve_steam_titles.py`, and user config at `<repo-root>/config.json`.
+
+At the start of every evaluation request, run:
+
+```text
+python -B <repo-root>/.agents/lib/steam_purchase_advisor/config_status.py
+```
+
+The helper exposes only configuration presence, field errors, countries, and whether the ITAD key exists. When every field needed by the request is valid, do not mention configuration, ask configuration questions, or run the update helper.
 
 A country supplied in the request overrides config for that request only. Never persist overrides automatically or open, print, quote, or expose `itad_api_key`.
 
-When `config.json` is absent or a relevant field is missing:
+When `config.json` is absent or a relevant field is missing or invalid:
 
-1. Explain in the user's language that the file is local and Git-ignored. Offer to create it from `config.example.json` only after confirmation and never overwrite it silently.
-2. Ask only for `report_country`, plus `pricing_country` and `itad_api_key` when ITAD pricing is wanted. Do not request `steam_id`.
-3. To obtain an ITAD key, direct the user to `https://isthereanydeal.com/apps/` to sign in, register an app, and store the generated key in local config. These scripts do not use the OAuth Client ID or Client Secret. Link `https://docs.isthereanydeal.com/` for API documentation.
-4. Never request the key in chat or on the command line. Ask the user to edit local config and report the key only as configured or not configured.
+1. Explain in the user's language that the file is local and Git-ignored. Ask only for `report_country`, plus `pricing_country` when ITAD is configured or the user wants to configure pricing. Do not request `steam_id`.
+2. Use supplied countries for the current request. Offer one combined confirmation to create or repair only the missing or invalid non-secret fields. Do not offer to replace a valid configured value merely because the request supplied an override.
+3. After confirmation, run the shared secret-safe update helper with only the approved fields:
+
+```text
+python -B <repo-root>/.agents/lib/steam_purchase_advisor/update_config.py [--report-country <CC>] [--pricing-country <CC>]
+```
+
+   The helper creates the standard shape when absent, preserves `itad_api_key` and unrelated settings internally, writes atomically, emits only status booleans and field names rather than configuration values, and refuses to replace valid existing fields. Use `--replace-existing` only after the user explicitly requests replacement and separately confirms the exact field names. Rerun the status helper after any update.
+4. If the user declines persistence, continue with request-only values and do not ask again during that request.
+5. To obtain an ITAD key, direct the user to `https://isthereanydeal.com/apps/` to sign in, register an app, and store the generated key in local config. These scripts do not use the OAuth Client ID or Client Secret. Link `https://docs.isthereanydeal.com/` for API documentation. Never request the key in chat or on the command line; rerun the status helper after the user edits local config and report the key only as configured or not configured.
 
 ## Gate all work on MCP readiness
 
@@ -47,12 +62,6 @@ Perform this gate once, before ITAD queries or per-game workers.
 The MCP client must own the stdio process; never merely launch `npx` in a shell.
 
 ## Select countries, language, and titles
-
-After MCP is ready, run:
-
-```text
-python -B <repo-root>/.agents/lib/steam_purchase_advisor/config_status.py
-```
 
 - Use `pricing_country` for ITAD regional prices. Ask for it only when ITAD is configured and the value is missing or invalid.
 - Use `report_country` to choose the report language. Ask when it is missing or invalid, and ask for a specific language when the country is multilingual.
