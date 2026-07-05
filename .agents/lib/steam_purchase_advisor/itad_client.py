@@ -91,3 +91,34 @@ def post(
 
         response_body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"ITAD API error {exc.code}: {response_body}") from exc
+
+
+def get(
+    path: str,
+    api_key: str,
+    params: dict[str, Any] | None = None,
+) -> Any:
+    """GET JSON from ITAD, surfacing rate limits without aggressive retries."""
+    url = f"{BASE_URL}{path}"
+    if params:
+        url = f"{url}?{urlencode(params)}"
+
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "ITAD-API-Key": api_key,
+            "User-Agent": USER_AGENT,
+        },
+        method="GET",
+    )
+
+    try:
+        with urlopen(request, timeout=30) as response:
+            return json.load(response)
+    except HTTPError as exc:
+        if exc.code == 429:
+            raise ItadRateLimitError(exc.headers.get("Retry-After")) from exc
+
+        response_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"ITAD API error {exc.code}: {response_body}") from exc

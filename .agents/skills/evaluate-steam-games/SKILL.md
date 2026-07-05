@@ -1,11 +1,11 @@
 ---
 name: evaluate-steam-games
-description: Evaluate one or more specified Steam games before purchase using regional current and historical-low pricing, full or user-approved stratified analysis of Steam reviews without a language filter, recent forum discussions, current product-health signals, developer-stated Early Access timelines, and a report localized to the configured report country. Use when the user supplies app IDs or game names and asks whether to buy, analyze, compare, or screen those games, or when filter-steam-wishlist hands off resolved app IDs. Requires a connected Steam Review and Forum MCP server; ITAD pricing is optional.
+description: Evaluate one or more specified Steam games before purchase using regional current and historical-low pricing, current and past bundle context, full or user-approved stratified analysis of Steam reviews without a language filter, recent forum discussions, current product-health signals, developer-stated Early Access timelines, and a report localized to the configured report country. Use when the user supplies app IDs or game names and asks whether to buy, analyze, compare, or screen those games, or when filter-steam-wishlist hands off resolved app IDs. Requires a connected Steam Review and Forum MCP server; ITAD deal data is optional.
 ---
 
 # Evaluate Steam Games
 
-Produce one localized purchase report per specified game. SteamID and wishlist visibility do not affect this skill. Require the Steam Review and Forum MCP for every report; treat ITAD pricing as optional.
+Produce one localized purchase report per specified game. SteamID and wishlist visibility do not affect this skill. Require the Steam Review and Forum MCP for every report; treat ITAD pricing and bundle context as optional.
 
 ## Protect repository state during execution
 
@@ -105,7 +105,7 @@ After retrieval modes are fixed, use one parallel worker per game when supported
 
 ## Single-game workflow
 
-### 1. Check optional price history
+### 1. Check optional price and bundle history
 
 Run after MCP readiness:
 
@@ -115,9 +115,19 @@ python -B <skill-dir>/scripts/historical_low_checker.py --appid <appid> [--count
 
 - When `price_status` is `available`, use `current_price` and the always-present `historical_low_price`; `regular_price` and `discount_percent` may independently be null.
 - When it is `unavailable`, preserve `reason`, mark every price signal unavailable, and continue. For `itad_rate_limited`, honor `retry_after` when practical and retry once. Treat other ITAD failures as non-fatal.
-- If the key is missing, explain that local `itad_api_key` configuration enables pricing.
+- If the key is missing, explain that local `itad_api_key` configuration enables pricing and bundle context.
+
+The script resolves the Steam app product and associated Steam package products in one ITAD lookup. It preserves the app-linked ITAD identity for standalone pricing, queries bundle history for every distinct resolved identity, and deduplicates bundles by ITAD bundle ID. This recovers history attached to a package identity rather than the current app identity.
+
+- When `bundle_status` is `available`, use `bundle_summary`, every `active_bundles` and `unknown_bundles` entry, and the already-limited `historical_bundles` list. A complete zero count means ITAD returned no known bundle and all bundle content must be omitted.
+- When `bundle_status` is `partial`, use the returned active, historical, and unknown-status bundles but disclose the precise coverage failure under evidence limitations. Do not turn partial coverage into a no-bundle claim.
+- When `bundle_status` is `unavailable`, preserve `bundle_reason`, omit bundle claims, and disclose the failure under evidence limitations only when it affects deal timing.
+- Treat `qualifying_tier_prices` as listed bundle-tier totals. A null amount or currency means variable or unrecorded pricing. The `note` may describe selection counts, build-your-own rules, or other material terms; paraphrase it and never imply that every eligible game is included.
+- Link bundle titles only with the API-provided `details_url`. Link `offer_url` only for an active bundle; never reuse an expired offer URL.
 
 Use `discount_percent` as the regional discount rate. Never calculate it from `historical_low_price` or describe that value as a regular price. Compare current with historical low: equal means matching the recorded low, lower means establishing a new low, and higher means above it. Never invent price data or make timing claims from missing signals.
+
+Preserve every ITAD amount and ISO currency exactly; never convert bundle currencies. Numerically compare an active bundle with the standalone price only when exactly one qualifying tier has a non-null amount and currency and that currency matches `current_price.currency`. Treat mismatched currencies, multiple qualifying prices, and missing prices as not directly comparable. Never treat a historical bundle tier as a standalone historical low.
 
 ### 2. Analyze reviews
 
@@ -295,6 +305,16 @@ Use emoji selectively as visual navigation and status reinforcement. Emoji must 
 | **Recorded low** | ... / Unavailable |
 | **Compared with recorded low** | ✅ Matches recorded low / 🔽 Establishes a new low / ⬆️ Above recorded low / Unavailable |
 
+### Bundle context
+
+[Omit this subsection completely when a complete bundle lookup returns zero bundles. Otherwise, show all active bundles and up to the three historical bundles already returned by the pricing script. State the known total when `historical_bundles_truncated` is true.]
+
+| Bundle | Availability | Provider | Listed qualifying tier |
+|---|---|---|---|
+| [Bundle title](<details_url>) [· Offer](<offer_url>) | Active until ... / Ended ... / Unknown | ... | ... / Variable or not recorded / Not directly comparable |
+
+[Include the `Offer` link only for active bundles. Explain material selection or build-your-own terms from `note`. State that listed tier totals are bundle prices rather than standalone game prices. Preserve currencies and do not perform FX conversion.]
+
 **Buy timing:** [One plain-language transaction judgment. Explain whether available price evidence supports buying now, waiting for a lower price, or provides insufficient information for confident timing advice. Do not let a historical low override material game-fit or product-state concerns.]
 
 ## Evidence and limitations
@@ -308,6 +328,7 @@ Use emoji selectively as visual navigation and status reinforcement. Emoji must 
 | **Review limitations** | [Sampling design, corpus failure, incomplete population comparison, or other material limitation.] |
 | **Forum coverage** | [Sections and relevant material inspected; note partial failures.] |
 | **Price coverage** | IsThereAnyDeal regional pricing for [country] / Unavailable — [reason] |
+| **Bundle coverage** | [Include only for partial/unavailable coverage or when bundles are reported: complete / partial — reason / unavailable — reason.] |
 
 **What the gaps prevent me from concluding:** [State exactly which conclusion, if any, cannot be made confidently because of missing evidence.]
 
@@ -357,6 +378,15 @@ Treat the report as a buyer's guide rather than an analysis transcript:
 * Only for `early-access` games, classify `Developer activity` as `active`, `sparse`, `silent`, or `unknown`. This describes verified update or communication activity only and is not itself a product-health rating.
 * Preserve the exact price inputs and historical-low semantics from the pricing workflow. The buyer-facing table labels `Now`, `Regular price`, `Discount`, `Recorded low`, and `Compared with recorded low` map respectively to `current_price`, `regular_price`, `discount_percent`, `historical_low_price`, and the required current-versus-historical-low comparison.
 * In the price table, `✅`, `🔽`, and `⬆️` only reinforce the explicit recorded-low comparison text. They do not represent overall deal quality or the purchase recommendation.
+* Place bundle evidence only in the optional `Bundle context` subsection under `💰 Is the price right?`, then weigh its transaction consequence in `Deal value` and `Buy timing`. Do not place bundle history under game fit or product health.
+* Show every active and unknown-status bundle and no more than the three historical bundles returned by the script. Use the known total to disclose omitted older entries. Omit the subsection when `bundle_status` is `available` and `bundle_summary.total_count` is zero.
+* Describe a tier amount as a listed qualifying bundle tier, never as a standalone game price or per-game value. Preserve material build-your-own, selection-count, addon, or variable-price conditions and link the ITAD details page near the row.
+* Never perform currency conversion. Compare an active bundle numerically with `current_price` only when there is exactly one unambiguous non-null qualifying amount and both currencies match. Otherwise state that the prices are not directly comparable.
+* A clearly priced active bundle at or below the standalone price may support choosing the bundle, but mention its tier or selection requirements. A more expensive active bundle matters only when its additional content is valuable to the buyer.
+* Define recent bundle history as at least one expiry within 365 days of the evidence time. Define recurrent recent history as at least two expiries within 730 days, including one within 365 days; use the script's summary fields rather than recalculating loosely.
+* Only when the standalone price is above its recorded low may recent or recurrent bundle history lower `Deal value` by at most one level or support waiting. Bundle history must not weaken the recommendation when the standalone price matches or establishes its recorded low. Older history is context only and never evidence that another bundle will occur.
+* Never compare a historical bundle tier with the standalone current price or recorded low, even when currencies match. It describes a different multi-product transaction.
+* Treat `bundle_status: partial` as known incomplete coverage: report returned records, disclose the limitation, and never claim that no other bundle exists. Treat `bundle_status: unavailable` as missing evidence rather than a no-bundle result.
 * `Buy timing` must remain separate from whether the underlying game is a good fit or the current product state is healthy.
 * Only for `early-access` games, report halted-development risk as `none found`, `low`, `medium`, `high`, or `confirmed`. Separate official evidence from owner reports and community speculation. Omit the field for every other release state.
 * Partial forum coverage must not be presented as evidence that no problem exists. Prefer `no recurring issue was found in the inspected material` when that is the strongest supported statement.
@@ -382,4 +412,4 @@ End each report with a naturally localized, action-oriented `🔍 Explore furthe
 
 ## Respect the ITAD request limit
 
-Treat ITAD's 1,000 requests per rolling five minutes as one shared API-key budget across workers, wishlist handoffs, and concurrent runs. Estimate two requests per game, include known prior consumption, reserve a safety margin, and never give each worker a separate allowance.
+Treat ITAD's 1,000 requests per rolling five minutes as one shared API-key budget across workers, wishlist handoffs, and concurrent runs. For each game, estimate `2 + A` normal ITAD requests, where `A` is the number of distinct ITAD identities resolved from its Steam app and package products: one product lookup, one price overview, and one bundle-history request per identity. Allow up to `A` additional active-bundle requests only when expiry values are missing or malformed. The Steam package-discovery request does not consume the ITAD quota. Include known prior consumption, reserve a safety margin, and never give each worker a separate allowance.
