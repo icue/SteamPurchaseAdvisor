@@ -1,6 +1,6 @@
 ---
 name: evaluate-steam-games
-description: Evaluate one or more specified Steam games before purchase using regional current and historical-low pricing, full or user-approved stratified analysis of Steam reviews without a language filter, recent forum discussions, current product-health signals, conditional Early Access development signals, and a report localized to the configured report country. Use when the user supplies app IDs or game names and asks whether to buy, analyze, compare, or screen those games, or when filter-steam-wishlist hands off resolved app IDs. Requires a connected Steam Review and Forum MCP server; ITAD pricing is optional.
+description: Evaluate one or more specified Steam games before purchase using regional current and historical-low pricing, full or user-approved stratified analysis of Steam reviews without a language filter, recent forum discussions, current product-health signals, developer-stated Early Access timelines, and a report localized to the configured report country. Use when the user supplies app IDs or game names and asks whether to buy, analyze, compare, or screen those games, or when filter-steam-wishlist hands off resolved app IDs. Requires a connected Steam Review and Forum MCP server; ITAD pricing is optional.
 ---
 
 # Evaluate Steam Games
@@ -18,7 +18,7 @@ Produce one localized purchase report per specified game. SteamID and wishlist v
 
 1. Accept one or more app IDs, game names, or IDs handed off by another skill.
 2. Resolve a game name from its canonical Steam Store URL (`/app/<appid>/`), preferring the official result. Ask when multiple games remain plausible.
-3. Resolve `scripts/historical_low_checker.py` relative to this `SKILL.md` and the repository root three directories above the skill directory.
+3. Resolve `scripts/historical_low_checker.py` and `scripts/early_access_duration_extractor.py` relative to this `SKILL.md` and the repository root three directories above the skill directory.
 4. Resolve the config status helper at `<repo-root>/.agents/lib/steam_purchase_advisor/config_status.py`, config update helper at `<repo-root>/.agents/lib/steam_purchase_advisor/update_config.py`, title resolver at `<repo-root>/.agents/lib/steam_purchase_advisor/resolve_steam_titles.py`, and user config at `<repo-root>/config.json`.
 
 At the start of every evaluation request, run:
@@ -69,6 +69,8 @@ After MCP readiness, obtain or reuse `get_steam_game_info` metadata once for eve
 - `unknown` when the required metadata is absent, malformed, or unavailable.
 
 Treat Steam's explicit current metadata as authoritative. Never infer Early Access or abandoned development from version numbers, update cadence, roadmap language, or community assumptions.
+
+For a verified `early-access` game, retain `release_date_display` as the current Steam-listed Early Access start for timeline analysis. Treat it as current Store metadata, not an immutable historical record; mark it unavailable when absent or unparseable.
 
 ## Select countries, language, and titles
 
@@ -145,7 +147,27 @@ For either mode:
 - Report population count or unknown, retrieval mode, retrieved counts, observed languages, failures, and material limitations. `language: "all"` removes the language filter but does not guarantee every language appears in a sample.
 - Claim exact theme counts only when counted in the retrieved material.
 
-### 3. Inspect recent discussions and conditional development status
+### 3. Build the Early Access timeline and inspect development status
+
+For each `early-access` game, run:
+
+```text
+python -B <skill-dir>/scripts/early_access_duration_extractor.py --appid <appid>
+```
+
+On success, read `answer` and `url` from stdout JSON. On nonzero exit, read the structured `reason` and `message` from stderr JSON, preserve the source-specific failure, and continue.
+
+Use its English Store Q&A answer with the reused `release_date_display` metadata and the runtime evidence date:
+
+1. Prefer an explicit developer-stated full-release date or window. Otherwise, derive a target only when the answer clearly states the Early Access duration and the Steam-listed start is parseable; add months or years as calendar units rather than fixed day counts.
+2. Preserve the statement's precision and force: keep ranges, approximations, conditions, and upper or lower bounds. Do not turn a year, season, broad phrase, or conditional estimate into an exact date, and do not derive a target from ambiguous or unrelated time spans.
+3. Compare a usable target with the evidence date at matching precision and state factually whether it is upcoming, currently within its window, or past its stated date or bound. Treat the Store Q&A as current when fetched but undated.
+4. If the answer gives an explicit target, use it even when the Steam-listed start is unavailable. If it gives only a duration and the start is unavailable, preserve the duration but do not derive a target date.
+5. Treat extractor failures as non-fatal missing evidence. Preserve whether the request failed, the Early Access section was missing, the standard question was missing, or the answer was empty; never describe these failures as the developer declining to provide a timeline. Continue all other evidence collection.
+6. Treat a successfully retrieved but uncalculable answer separately from retrieval failure: summarize the statement and say that it does not support a defensible target.
+7. Use a verified official roadmap or announcement as independent timeline evidence when available. Identify its source, report unresolved conflicts with the Store Q&A, and prefer neither unless one explicitly supersedes the other.
+
+Then inspect current discussions and official activity:
 
 1. Call `list_steam_forum_sections`, then inspect page 1 of the main board and relevant active sections with `list_steam_forum_topics`. Inspect active `eventcomments` for current fixes or operational-support notices when relevant and, for Early Access games, for development progress and roadmap updates.
 2. Treat listing `last_activity_timestamp` and `last_activity_display` only as latest reply or listing activity. For any publication-time claim, open the topic with `get_steam_forum_topic` and use `topic.original_post_timestamp`; report unknown when null. When an Early Access update gap is material, calculate it only from verified original-post timestamps.
@@ -213,15 +235,25 @@ Use emoji selectively as visual navigation and status reinforcement. Emoji must 
 
 ### What players love
 
+[Choose exactly one format for this subsection. Use the table when there are at least two material themes and every theme fits one concise player-experience sentence without losing important qualifications, caveats, or subgroup context. Otherwise, use bullets for the entire subsection.]
+
+| Theme | Evidence | Player experience |
+|---|---|---|
+| [Theme] | Strong / Moderate / Limited | [Translate the recurring strength into what the player actually experiences or gains.] |
+| [Theme] | Strong / Moderate / Limited | [Buyer consequence.] |
+
 - **[Theme] — Strong / Moderate / Limited evidence:** [Translate the recurring strength into what the player actually experiences or gains.]
-- **[Theme] — Strong / Moderate / Limited evidence:** [Buyer consequence.]
-- **[Theme] — Strong / Moderate / Limited evidence:** [Buyer consequence.]
 
 ### What players criticize
 
+[Choose exactly one format for this subsection. Use the table when there are at least two material themes and every theme fits one concise player-experience sentence without losing important qualifications, caveats, or subgroup context. Otherwise, use bullets for the entire subsection.]
+
+| Theme | Evidence | Player experience |
+|---|---|---|
+| [Theme] | Strong / Moderate / Limited | [Translate the recurring weakness into its practical effect on the player.] |
+| [Theme] | Strong / Moderate / Limited | [Buyer consequence.] |
+
 - **[Theme] — Strong / Moderate / Limited evidence:** [Translate the recurring weakness into its practical effect on the player.]
-- **[Theme] — Strong / Moderate / Limited evidence:** [Buyer consequence.]
-- **[Theme] — Strong / Moderate / Limited evidence:** [Buyer consequence.]
 
 ### Even fans admit
 
@@ -242,6 +274,8 @@ Use emoji selectively as visual navigation and status reinforcement. Emoji must 
 | **Current issues** | Clear / Watch / Concerning / Unknown | [Short buyer consequence based on current recurring product issues.] |
 | **Developer activity** | Active / Sparse / Silent / Unknown | [Early Access only: short factual summary of verified update or communication activity. Omit this row otherwise.] |
 | **Halted-development risk** | None found / Low / Medium / High / Confirmed | [Early Access only: short purchasing consequence. Omit this row otherwise.] |
+
+**Early Access timeline:** [Early Access only; always include one localized compact line. When calculable: state the Steam-listed start, developer estimate, derived target/window/bound, and factual position as of the evidence date. When the answer is uncalculable: summarize it and state that no defensible target can be derived. When extraction fails and no independent official target is available: state that the timeline is unavailable and give the localized source-specific limitation. When an independent official target remains available: report it and disclose the Store Q&A limitation. When only the Steam-listed start is missing: preserve an explicit target, or preserve a duration while stating why no target date was derived. Omit this line otherwise.]
 
 **What is happening now:** [Explain current recurring bugs, crashes, performance problems, server concerns, unfinished-content complaints, or that no recurring issue was found in the inspected material. Add direct source links near supported forum claims.]
 
@@ -289,7 +323,7 @@ Treat the report as a buyer's guide rather than an analysis transcript:
 * Keep the underlying distinctions between game fit, product state, deal value, and evidence confidence explicit in the `🎯 Decision` section.
 * Do not convert the decision signals into numeric scores or a hidden aggregate rating.
 * Do not add a separate final verdict. The `🎯 Decision` section is the conclusion; later sections explain the evidence behind it.
-* Use tables for compact, directly comparable facts or statuses. Keep nuanced review findings and decision-relevant caveats in prose or bullets.
+* Use tables for compact, directly comparable facts, statuses, or review themes. Keep nuanced review findings and decision-relevant caveats in prose or bullets.
 * Use emoji only for major section navigation, recommendation reinforcement, fit-table orientation, and factual position-versus-recorded-low reinforcement.
 * Emoji must accompany explicit text. Never use emoji alone to communicate a recommendation, status, risk level, evidence strength, or price conclusion.
 * Do not add traffic-light emoji to `Game fit`, `Product state`, `Deal value`, `Current issues`, `Developer activity`, `Halted-development risk`, or review evidence-strength labels. Their textual taxonomies are authoritative.
@@ -299,10 +333,15 @@ Treat the report as a buyer's guide rather than an analysis transcript:
 * For review findings, preserve all four evidence groups internally: strengths in positive reviews, weaknesses in positive reviews, weaknesses in negative reviews, and strengths in negative reviews. Translate them into `What players love`, `What players criticize`, `Even fans admit`, and `Even critics concede`.
 * Attach `strong`, `moderate`, or `limited evidence` only to review themes when the retrieved material supports that qualitative evidence judgment. These labels describe evidence, not game quality.
 * Translate each material review theme into a buyer consequence. Prefer `recurring stutter makes the current build a poor fit for frame-sensitive players` over `performance issues`.
+* Choose the format independently for `What players love` and `What players criticize`. Use a table only when the subsection has at least two material themes and every theme preserves its important meaning in one concise player-experience sentence. Use bullets for the entire subsection when it has only one material theme or any theme needs multiple sentences, qualifications, caveats, or subgroup context. Never mix a table and bullets within the same subsection.
 * In `Where players disagree`, state a reason for the split only when the retrieved evidence supports that context. Do not invent explanations from genre assumptions.
 * In the `🎮 Is this game for you?` table, do not force the two columns into opposites or paired comparisons. Each cell is an independent supported fit condition. Leave a cell blank when the columns contain different numbers of material findings.
 * In `🛠️ Is the game healthy right now?`, describe the current inspected state and its purchasing consequence. Do not predict that a game will remain healthy for a specific future period.
 * Use the derived release state consistently across evidence collection, the decision card, the health section, and exploration questions. Do not let a worker reclassify it from forum activity.
+* For every `early-access` game, include the compact `Early Access timeline` line and link its Store Q&A or official timeline source when available. Keep it separate from `Developer activity`; omit it for every other release state.
+* Treat timeline position as context, not a recommendation rule. A distant target is neutral by itself, a nearby target is not a buy signal, and a passed estimate is not by itself evidence of halted development.
+* Escalate timeline evidence into `Product state`, `Before you buy`, halted-development risk, or the recommendation only when combined with verified progress, update cadence, build condition, roadmap evidence, repeated unfinished-content concerns, or another buyer-relevant factor.
+* Do not lower `Product state`, halted-development risk, recommendation, or confidence solely because timeline extraction failed. Lower confidence only when the missing timeline prevents a specific decision-relevant conclusion.
 * For `full-release` games, base `Product state` on current technical, content, server, and operational-support evidence. Treat a lack of recent patches or developer posts as neutral and never use it alone to lower `Product state`, recommendation, or confidence.
 * For a `full-release` game with a material online or service dependency, report verified server availability, support degradation, or shutdown evidence under `Current issues` and `What is happening now`; do not convert it into a developer-activity or halted-development judgment.
 * For `unknown` release state, omit the Early Access label, `Developer activity`, `Halted-development risk`, and `What the developer is doing`. Show a coverage notice only when that uncertainty weakens a decision-relevant conclusion.
