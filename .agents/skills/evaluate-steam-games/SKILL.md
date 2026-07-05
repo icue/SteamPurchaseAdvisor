@@ -311,8 +311,9 @@ Use emoji selectively as visual navigation and status reinforcement. Emoji must 
 
 ## 🔍 Explore further
 
-- [Compact question tied to a specific finding, disagreement, uncertainty, or evidence gap?]
-- [Compact question tied to another review, forum, development, event-comment, or metadata finding?]
+- [Dynamic question?]
+- [Dynamic question?]
+- [Dynamic question?]
 ```
 
 Base recommendations on all available evidence. A historical low does not by itself justify purchase. Preserve the four review evidence groups and state material gaps. Without price data, avoid confident buy-now or wait-for-lower-price timing claims unless the user supplied another explicit source. In sampled mode, identify the design prominently and calibrate confidence to consistency and coverage, not the sampled sentiment ratio.
@@ -373,8 +374,8 @@ Before delivery, the coordinator must enforce the exact runtime `report_language
 
 End each report with a naturally localized, action-oriented `🔍 Explore further` heading:
 
-* Ask one compact question per line; never exceed 12 English words per question.
-* Tie each question to a finding, disagreement, uncertainty, or gap and offer only MCP-supported review, forum, event-comment, or metadata exploration. Offer development-activity or roadmap exploration only for verified Early Access games; for full releases, offer operational-support exploration only when continued service materially affects the purchase.
+* Ask exactly three distinct, compact questions, one per line; never exceed 12 English words per question.
+* Select each question dynamically from a finding, disagreement, uncertainty, or gap; do not assign a fixed topic, purpose, or evidence source to any question position. Offer only MCP-supported review, forum, event-comment, or metadata exploration. Offer development-activity or roadmap exploration only for verified Early Access games; for full releases, offer operational-support exploration only when continued service materially affects the purchase.
 * Do not repeat answered questions or offer price research, alerts, external research, benchmarks, or monitoring.
 
 ## Respect the ITAD request limit
