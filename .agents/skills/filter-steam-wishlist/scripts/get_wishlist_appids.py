@@ -265,11 +265,15 @@ def get_filtered_sale_appids(
             "/games/prices/v3",
             api_key,
             itad_id_batch,
-            params={"country": country, "deals": "true", "vouchers": "true"},
+            params={"country": country, "deals": "true", "vouchers": "false", "shops": str(STEAM_SHOP_ID)},
         )
         for game in price_results:
             sale_deals = [
-                deal for deal in game.get("deals", []) if deal.get("cut", 0) > 0
+                deal
+                for deal in game.get("deals", [])
+                if deal.get("cut", 0) > 0
+                and isinstance(deal.get("shop"), dict)
+                and deal["shop"].get("id") == STEAM_SHOP_ID
             ]
             if not sale_deals:
                 continue
@@ -278,17 +282,19 @@ def get_filtered_sale_appids(
                 matching_itad_ids.add(game["id"])
                 continue
 
-            historical_low = game.get("historyLow", {}).get("all", {}).get("amount")
-            if historical_low is None:
-                continue
-
-            if any(
-                deal.get("price", {}).get("amount") is not None
-                and Decimal(str(deal["price"]["amount"]))
-                <= Decimal(str(historical_low))
-                for deal in sale_deals
-            ):
-                matching_itad_ids.add(game["id"])
+            for deal in sale_deals:
+                store_low = deal.get("storeLow")
+                if not isinstance(store_low, dict) or store_low.get("amount") is None:
+                    continue
+                deal_price = deal.get("price", {})
+                if deal_price.get("amount") is None:
+                    continue
+                if (
+                    Decimal(str(deal_price["amount"]))
+                    <= Decimal(str(store_low["amount"]))
+                ):
+                    matching_itad_ids.add(game["id"])
+                    break
 
     return [
         appid

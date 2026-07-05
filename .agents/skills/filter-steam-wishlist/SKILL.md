@@ -1,11 +1,11 @@
 ---
 name: filter-steam-wishlist
-description: List and filter a user's public Steam wishlist by current sale status, ITAD historical-low status, Steam Early Access or full-release state, and pricing country, then resolve localized Steam titles using the report country. Accept a SteamID64, numeric Steam profile URL, custom Steam profile URL, or exact custom profile ID. Use when the user asks to list, show, find, or filter wishlist games; asks which wishlist games are on sale, at historical lows, in Early Access, or fully released; or asks to analyze wishlist games before handing selected app IDs to the sibling evaluate-steam-games skill. Requires a resolvable Steam profile and public wishlist; gracefully preserves requested non-price filters when ITAD price data is unavailable.
+description: List and filter a user's public Steam wishlist by current Steam Store sale status, Steam Store historical-low status, Steam Early Access or full-release state, and pricing country, then resolve localized Steam titles using the report country. Accept a SteamID64, numeric Steam profile URL, custom Steam profile URL, or exact custom profile ID. Use when the user asks to list, show, find, or filter wishlist games; asks which wishlist games are on sale, at historical lows, in Early Access, or fully released; or asks to analyze wishlist games before handing selected app IDs to the sibling evaluate-steam-games skill. Requires a resolvable Steam profile and public wishlist; gracefully preserves requested non-price filters when ITAD price data is unavailable.
 ---
 
 # Filter Steam Wishlist
 
-Select games from a public Steam wishlist, resolve localized titles, and hand selected app IDs to `evaluate-steam-games` only when analysis is requested. Do not check MCP readiness; this skill does not use the Steam Review and Forum MCP.
+Select games from a public Steam wishlist, resolve localized titles, and hand selected app IDs to `evaluate-steam-games` only when analysis is requested. Do not check MCP readiness; this skill does not use the Steam Review and Forum MCP. Sale and historical-low filtering covers only the Steam Store; third-party Steam key sellers are excluded.
 
 ## Protect repository state during execution
 
@@ -99,6 +99,8 @@ python -B <skill-dir>/scripts/get_wishlist_appids.py [--historical-low-only | --
 `--steam-id` remains a backward-compatible alias for `--steam-profile`.
 
 Map generic list and show requests to the complete wishlist. Apply a sale, historical-low, Early Access, or full-release filter only when the user explicitly requests it. Treat the price mode and release-state selector as independent filters; combine them when the request contains both criteria. `--release-state any` is the default and preserves existing behavior.
+
+Sale and historical-low filters restrict results to Steam Store deals (`shop_id=61`, `vouchers=false`). The `--historical-low-only` flag compares each Steam deal's current price against its per-store low, not a cross-store historical low.
 
 The script applies release-state filtering after price filtering and preserves wishlist order. It uses Steam Store appdetails metadata: genre ID `70` means Early Access, a non-coming-soon app without genre ID `70` means full release, and coming-soon apps match neither filtered state. When any candidate cannot be classified, the script returns `release_state_data_unavailable` and no partial result; stop and report that the release-state filter could not be applied.
 

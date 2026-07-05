@@ -113,9 +113,12 @@ Run after MCP readiness:
 python -B <skill-dir>/scripts/historical_low_checker.py --appid <appid> [--country <CC>] [--report-country <CC>]
 ```
 
-- When `price_status` is `available`, use `current_price` and the always-present `historical_low_price`; `regular_price` and `discount_percent` may independently be null.
+Standalone price, sale, and historical-low analysis covers only the Steam Store (`price_scope: "steam"`). Bundles are the explicit non-Steam exception and retain their existing multi-store coverage.
+
+- When `price_status` is `available`, use `current_price` and the Steam-store-only `historical_low_price`; `regular_price` and `discount_percent` may independently be null.
 - When it is `unavailable`, preserve `reason`, mark every price signal unavailable, and continue. For `itad_rate_limited`, honor `retry_after` when practical and retry once. Treat other ITAD failures as non-fatal.
 - If the key is missing, explain that local `itad_api_key` configuration enables pricing and bundle context.
+- Current price, Steam store low, Steam history, and bundles fail independently; a failure in one does not suppress valid evidence from the others.
 
 The script resolves the Steam app product and associated Steam package products in one ITAD lookup. It preserves the app-linked ITAD identity for standalone pricing, queries bundle history for every distinct resolved identity, and deduplicates bundles by ITAD bundle ID. This recovers history attached to a package identity rather than the current app identity.
 
@@ -302,8 +305,11 @@ Use emoji selectively as visual navigation and status reinforcement. Emoji must 
 | **Now** | ... / Unavailable |
 | **Regular price** | ... / Unavailable |
 | **Discount** | ... / Unavailable |
-| **Recorded low** | ... / Unavailable |
+| **Steam recorded low** | ... and date / Unavailable |
 | **Compared with recorded low** | ✅ Matches recorded low / 🔽 Establishes a new low / ⬆️ Above recorded low / Unavailable |
+| **Exact-low recurrence** | Recurring / Recent isolated / Aging / Stale isolated / Stale previously repeated / Insufficient |
+| **Recurring realistic sale level** | ... / None found / Unavailable |
+| **Sustained list-price change** | ↑ Increased from ... to ... on date (+...%) / ↓ Decreased from ... to ... on date (−...%) / None detected / Ambiguous / Insufficient |
 
 ### Bundle context
 
@@ -315,7 +321,9 @@ Use emoji selectively as visual navigation and status reinforcement. Emoji must 
 
 [Include the `Offer` link only for active bundles. Explain material selection or build-your-own terms from `note`. State that listed tier totals are bundle prices rather than standalone game prices. Preserve currencies and do not perform FX conversion.]
 
-**Buy timing:** [One plain-language transaction judgment. Explain whether available price evidence supports buying now, waiting for a lower price, or provides insufficient information for confident timing advice. Do not let a historical low override material game-fit or product-state concerns.]
+**Deal value:** [Explain how the current price compares with the recurring realistic sale level and the recorded Steam low, factoring in any sustained list-price change that shifted the relevant historical regime. Do not let a historical low override material game-fit or product-state concerns.]
+
+**Buy timing:** [One plain-language transaction judgment. Explain whether available price evidence supports buying now, waiting for a lower price, or provides insufficient information for confident timing advice. A stale isolated record alone must not support waiting; prefer the recurring current-regime sale level. Being above a lower recurring level supports waiting. Repricing changes which historical regime is relevant and must be explained here, but must not independently alter game fit or product health. Pre-change lows remain factual but are not presented as realistic current-regime targets. Missing or ambiguous history prevents recurrence and repricing claims without suppressing a valid current Steam price.]
 
 ## Evidence and limitations
 
@@ -327,7 +335,8 @@ Use emoji selectively as visual navigation and status reinforcement. Emoji must 
 | **Languages observed** | ... |
 | **Review limitations** | [Sampling design, corpus failure, incomplete population comparison, or other material limitation.] |
 | **Forum coverage** | [Sections and relevant material inspected; note partial failures.] |
-| **Price coverage** | IsThereAnyDeal regional pricing for [country] / Unavailable — [reason] |
+| **Price coverage** | Steam Store-only via IsThereAnyDeal for [country] / Unavailable — [reason] |
+| **Steam history** | Available — [episode count] sale episodes / Unavailable — [reason] |
 | **Bundle coverage** | [Include only for partial/unavailable coverage or when bundles are reported: complete / partial — reason / unavailable — reason.] |
 
 **What the gaps prevent me from concluding:** [State exactly which conclusion, if any, cannot be made confidently because of missing evidence.]
@@ -376,8 +385,11 @@ Treat the report as a buyer's guide rather than an analysis transcript:
   * `concerning` when recurring current issues can materially affect purchase suitability;
   * `unknown` when coverage is insufficient.
 * Only for `early-access` games, classify `Developer activity` as `active`, `sparse`, `silent`, or `unknown`. This describes verified update or communication activity only and is not itself a product-health rating.
-* Preserve the exact price inputs and historical-low semantics from the pricing workflow. The buyer-facing table labels `Now`, `Regular price`, `Discount`, `Recorded low`, and `Compared with recorded low` map respectively to `current_price`, `regular_price`, `discount_percent`, `historical_low_price`, and the required current-versus-historical-low comparison.
+* Preserve the exact price inputs and historical-low semantics from the pricing workflow. The buyer-facing table labels `Current Steam price`, `Steam regular price`, `Discount`, `Steam recorded low`, and `Compared with recorded low` map respectively to `current_price`, `regular_price`, `discount_percent`, `historical_low_price` with `steam_low_timestamp`, and the required current-versus-historical-low comparison. `Exact-low recurrence` maps to `exact_low_pattern`. `Recurring realistic sale level` maps to `recurring_sale_price`. `Sustained list-price change` maps to `list_price_change`.
 * In the price table, `✅`, `🔽`, and `⬆️` only reinforce the explicit recorded-low comparison text. They do not represent overall deal quality or the purchase recommendation.
+* A stale isolated record alone must not support waiting; prefer the recurring current-regime sale level when available. Matching a recurring level supports buying on price; being above a lower recurring level supports waiting.
+* A sustained list-price change shifts which historical regime is relevant. Explain this in `Deal value` and `Buy timing` but do not independently alter game fit or product health. Pre-change lows remain factual but are not presented as realistic current-regime targets.
+* Missing or ambiguous history prevents recurrence and repricing claims without suppressing a valid current Steam price.
 * Place bundle evidence only in the optional `Bundle context` subsection under `💰 Is the price right?`, then weigh its transaction consequence in `Deal value` and `Buy timing`. Do not place bundle history under game fit or product health.
 * Show every active and unknown-status bundle and no more than the three historical bundles returned by the script. Use the known total to disclose omitted older entries. Omit the subsection when `bundle_status` is `available` and `bundle_summary.total_count` is zero.
 * Describe a tier amount as a listed qualifying bundle tier, never as a standalone game price or per-game value. Preserve material build-your-own, selection-count, addon, or variable-price conditions and link the ITAD details page near the row.
@@ -412,4 +424,4 @@ End each report with a naturally localized, action-oriented `🔍 Explore furthe
 
 ## Respect the ITAD request limit
 
-Treat ITAD's 1,000 requests per rolling five minutes as one shared API-key budget across workers, wishlist handoffs, and concurrent runs. For each game, estimate `2 + A` normal ITAD requests, where `A` is the number of distinct ITAD identities resolved from its Steam app and package products: one product lookup, one price overview, and one bundle-history request per identity. Allow up to `A` additional active-bundle requests only when expiry values are missing or malformed. The Steam package-discovery request does not consume the ITAD quota. Include known prior consumption, reserve a safety margin, and never give each worker a separate allowance.
+Treat ITAD's 1,000 requests per rolling five minutes as one shared API-key budget across workers, wishlist handoffs, and concurrent runs. For each game, estimate `4 + A` normal ITAD requests, where `A` is the number of distinct ITAD identities resolved from its Steam app and package products: one product lookup, one Steam-filtered price overview, one Steam store low, one Steam price history, and one bundle-history request per identity. Allow up to `A` additional active-bundle requests only when expiry values are missing or malformed. The Steam package-discovery request does not consume the ITAD quota. Include known prior consumption, reserve a safety margin, and never give each worker a separate allowance.
