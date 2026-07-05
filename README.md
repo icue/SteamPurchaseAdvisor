@@ -15,10 +15,9 @@ Steam Purchase Advisor is a Skills bundle for filtering public Steam wishlists a
 
 ## Example prompts
 
-- “List my Steam wishlist.”
+- “Show all fully released games on my wishlist.”
 - “Show my wishlisted games currently matching or beating their historical low.”
 - “Show my Early Access wishlist games currently on sale.”
-- “Show all fully released games on my wishlist.”
 - “Should I buy Steam game XXX now?”
 - “Evaluate all my wishlisted games currently on sale.”
 
