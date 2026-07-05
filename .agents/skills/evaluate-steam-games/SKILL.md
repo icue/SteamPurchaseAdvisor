@@ -191,9 +191,11 @@ Use emoji selectively as visual navigation and status reinforcement. Emoji must 
 ```markdown
 # [Localized game title](https://store.steampowered.com/app/<appid>/)
 
-`App <appid>` · **Early Access** · [SteamDB](https://steamdb.info/app/<appid>/) · Evidence checked: YYYY-MM-DD
+`App <appid>` · **Early Access** · Evidence checked: YYYY-MM-DD
 
-[Include the localized `Early Access` label and its preceding separator only when release state is `early-access`. Omit both for `full-release`, `unreleased`, or `unknown`.]
+[SteamDB](https://steamdb.info/app/<appid>/) · [ITAD](<itad_url>)
+
+[Include the localized `Early Access` label and its preceding separator only when release state is `early-access`. Omit both for `full-release`, `unreleased`, or `unknown`. Include the `ITAD` link and its preceding separator only when `itad_url` is available from the pricing script.]
 
 > [Coverage notice only when materially relevant: recent sentiment-stratified sample / partial forum coverage / price data unavailable / unknown release state that affects the decision / other decision-relevant limitation.]
 

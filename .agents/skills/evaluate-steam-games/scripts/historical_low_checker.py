@@ -153,6 +153,7 @@ def unavailable_result(
         "message": message,
         "country": country,
         "report_country": report_country,
+        "itad_url": None,
         "is_historical_low": None,
         "current_price": None,
         "regular_price": None,
@@ -287,6 +288,7 @@ def main() -> int:
             current_offer, current_price, regular_price
         )
         historical_low_price = extract_price(overview.get("lowest"))
+        itad_url = overview.get("urls", {}).get("game")
         require_comparable_prices(current_price, historical_low_price)
     except ItadRateLimitError as exc:
         print(
@@ -332,6 +334,7 @@ def main() -> int:
                 "country": country,
                 "report_country": report_country,
                 "report_country_error": report_country_error,
+                "itad_url": itad_url,
                 "is_historical_low": is_historical_low,
                 "current_price": current_price,
                 "regular_price": regular_price,
