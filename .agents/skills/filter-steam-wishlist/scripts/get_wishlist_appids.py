@@ -3,10 +3,10 @@
 import argparse
 import json
 import sys
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -33,14 +33,19 @@ from steam_purchase_advisor.steam_identity import (  # noqa: E402
     SteamIdentityResolutionError,
     resolve_steam_profile,
 )
+from steam_purchase_advisor.steam_price_identity import (  # noqa: E402
+    PriceIdentityError,
+    SteamAppDetails,
+    SteamAppDetailsError,
+    fetch_steam_appdetails,
+    select_itad_price_identity,
+)
 
 
 WISHLIST_URL = "https://api.steampowered.com/IWishlistService/GetWishlist/v1/"
-APPDETAILS_URL = "https://store.steampowered.com/api/appdetails"
 EARLY_ACCESS_GENRE_ID = "70"
 RELEASE_STATE_CHOICES = ("any", "early-access", "full-release")
 STORE_MAX_WORKERS = 4
-STORE_RETRY_DELAYS = (1.0, 2.0)
 
 
 class WishlistUnavailableError(RuntimeError):
@@ -59,6 +64,17 @@ class ReleaseStateUnavailableError(RuntimeError):
         super().__init__(
             "Steam release-state metadata was unavailable for "
             f"{len(failures)} candidate game(s)."
+        )
+
+
+class PriceMetadataUnavailableError(RuntimeError):
+    """Raised when regional AppDetails metadata is incomplete."""
+
+    def __init__(self, failures: dict[int, str]) -> None:
+        self.failures = failures
+        super().__init__(
+            "Steam regional price metadata was unavailable for "
+            f"{len(failures)} wishlist game(s)."
         )
 
 
@@ -154,44 +170,14 @@ def classify_release_state(data: object) -> str:
 
 def fetch_release_state(appid: int) -> tuple[str, str | None]:
     """Fetch one app's release state with bounded retries."""
-    params = urlencode({"appids": appid, "l": "english"})
-    request = Request(
-        f"{APPDETAILS_URL}?{params}",
-        headers={"Accept": "application/json", "User-Agent": USER_AGENT},
-    )
-
-    attempts = len(STORE_RETRY_DELAYS) + 1
-    for attempt in range(attempts):
-        failure_reason = "steam_store_request_failed"
-        try:
-            with urlopen(request, timeout=30) as response:
-                payload = json.load(response)
-            entry = payload.get(str(appid)) if isinstance(payload, dict) else None
-            data = (
-                entry.get("data")
-                if isinstance(entry, dict) and entry.get("success") is True
-                else None
-            )
-            release_state = classify_release_state(data)
-            if release_state == "unknown":
-                failure_reason = "steam_invalid_response"
-            else:
-                return release_state, None
-        except HTTPError as exc:
-            failure_reason = f"steam_http_{exc.code}"
-            retryable = exc.code == 429 or 500 <= exc.code < 600
-            if not retryable:
-                return "unknown", failure_reason
-        except json.JSONDecodeError:
-            failure_reason = "steam_invalid_response"
-        except (URLError, TimeoutError, OSError):
-            failure_reason = "steam_store_request_failed"
-
-        if attempt == attempts - 1:
-            return "unknown", failure_reason
-        time.sleep(STORE_RETRY_DELAYS[attempt])
-
-    raise AssertionError("unreachable")
+    try:
+        steam_details = fetch_steam_appdetails(appid)
+    except SteamAppDetailsError as exc:
+        return "unknown", exc.reason
+    release_state = classify_release_state(steam_details.data)
+    if release_state == "unknown":
+        return "unknown", "steam_invalid_response"
+    return release_state, None
 
 
 def fetch_release_states(
@@ -242,24 +228,70 @@ def get_release_state_filtered_appids(
     return select_appids_by_release_state(appids, release_state, states)
 
 
+def fetch_price_metadata(
+    appids: list[int], country: str
+) -> dict[int, SteamAppDetails]:
+    """Fetch every regional AppDetails record or fail the complete filter."""
+    if not appids:
+        return {}
+
+    details: dict[int, SteamAppDetails] = {}
+    failures: dict[int, str] = {}
+    workers = min(STORE_MAX_WORKERS, len(appids))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(fetch_steam_appdetails, appid, country): appid
+            for appid in appids
+        }
+        for future in as_completed(futures):
+            appid = futures[future]
+            try:
+                details[appid] = future.result()
+            except SteamAppDetailsError as exc:
+                failures[appid] = exc.reason
+            except Exception:
+                failures[appid] = "unexpected_store_error"
+
+    if failures:
+        raise PriceMetadataUnavailableError(failures)
+    return details
+
+
 def get_filtered_sale_appids(
     appids: list[int],
     api_key: str,
     historical_low_only: bool,
     country: str,
 ) -> list[int]:
-    itad_id_by_appid: dict[int, str] = {}
+    details_by_appid = fetch_price_metadata(appids, country)
+    sale_candidates = {
+        appid: details
+        for appid, details in details_by_appid.items()
+        if details.is_discounted
+    }
+    if not sale_candidates:
+        return []
 
-    for appid_batch in batched(appids, BATCH_SIZE):
-        steam_ids = [f"app/{appid}" for appid in appid_batch]
-        lookup = post(f"/lookup/id/shop/{STEAM_SHOP_ID}/v1", api_key, steam_ids)
-        for appid in appid_batch:
-            itad_id = lookup.get(f"app/{appid}")
-            if itad_id:
-                itad_id_by_appid[appid] = itad_id
+    products: list[str] = []
+    for appid, details in sale_candidates.items():
+        products.append(f"app/{appid}")
+        products.extend(details.base_package_products)
+    products = list(dict.fromkeys(products))
 
-    matching_itad_ids: set[str] = set()
-    itad_ids = list(dict.fromkeys(itad_id_by_appid.values()))
+    product_to_itad_id: dict[str, str] = {}
+    for product_batch in batched(products, BATCH_SIZE):
+        lookup = post(
+            f"/lookup/id/shop/{STEAM_SHOP_ID}/v1", api_key, product_batch
+        )
+        if not isinstance(lookup, dict):
+            raise RuntimeError("ITAD returned an invalid product lookup response.")
+        for product in product_batch:
+            itad_id = lookup.get(product)
+            if isinstance(itad_id, str) and itad_id:
+                product_to_itad_id[product] = itad_id
+
+    offers_by_itad_id: dict[str, list[dict[str, Any]]] = {}
+    itad_ids = list(dict.fromkeys(product_to_itad_id.values()))
     for itad_id_batch in batched(itad_ids, BATCH_SIZE):
         price_results = post(
             "/games/prices/v3",
@@ -267,40 +299,60 @@ def get_filtered_sale_appids(
             itad_id_batch,
             params={"country": country, "deals": "true", "vouchers": "false", "shops": str(STEAM_SHOP_ID)},
         )
+        if not isinstance(price_results, list):
+            raise RuntimeError("ITAD returned an invalid prices response.")
         for game in price_results:
-            sale_deals = [
-                deal
-                for deal in game.get("deals", [])
-                if deal.get("cut", 0) > 0
-                and isinstance(deal.get("shop"), dict)
-                and deal["shop"].get("id") == STEAM_SHOP_ID
-            ]
-            if not sale_deals:
+            if not isinstance(game, dict) or not isinstance(game.get("id"), str):
                 continue
+            deals = game.get("deals")
+            if isinstance(deals, list):
+                offers_by_itad_id[game["id"]] = [
+                    deal for deal in deals if isinstance(deal, dict)
+                ]
 
-            if not historical_low_only:
-                matching_itad_ids.add(game["id"])
-                continue
+    matches: set[int] = set()
+    for appid, steam_details in sale_candidates.items():
+        try:
+            selection = select_itad_price_identity(
+                steam_details, product_to_itad_id, offers_by_itad_id
+            )
+        except PriceIdentityError:
+            continue
 
-            for deal in sale_deals:
-                store_low = deal.get("storeLow")
-                if not isinstance(store_low, dict) or store_low.get("amount") is None:
-                    continue
-                deal_price = deal.get("price", {})
-                if deal_price.get("amount") is None:
-                    continue
-                if (
-                    Decimal(str(deal_price["amount"]))
-                    <= Decimal(str(store_low["amount"]))
-                ):
-                    matching_itad_ids.add(game["id"])
-                    break
+        offer = selection.offer
+        try:
+            cut = Decimal(str(offer.get("cut")))
+        except (ValueError, ArithmeticError):
+            continue
+        if not cut.is_finite() or cut <= 0:
+            continue
+        if not historical_low_only:
+            matches.add(appid)
+            continue
 
-    return [
-        appid
-        for appid in appids
-        if itad_id_by_appid.get(appid) in matching_itad_ids
-    ]
+        deal_price = offer.get("price")
+        store_low = offer.get("storeLow")
+        if not isinstance(deal_price, dict) or not isinstance(store_low, dict):
+            continue
+        if (
+            deal_price.get("currency") != store_low.get("currency")
+            or deal_price.get("amount") is None
+            or store_low.get("amount") is None
+        ):
+            continue
+        try:
+            deal_amount = Decimal(str(deal_price["amount"]))
+            low_amount = Decimal(str(store_low["amount"]))
+        except (ValueError, ArithmeticError):
+            continue
+        if (
+            deal_amount.is_finite()
+            and low_amount.is_finite()
+            and deal_amount <= low_amount
+        ):
+            matches.add(appid)
+
+    return [appid for appid in appids if appid in matches]
 
 
 def get_on_sale_appids(
@@ -449,6 +501,15 @@ def main() -> int:
                 appids = get_historical_low_sale_appids(appids, api_key, country)
             else:
                 appids = get_on_sale_appids(appids, api_key, country)
+        except PriceMetadataUnavailableError as exc:
+            reasons = sorted(set(exc.failures.values()))
+            emit_error(
+                "price_data_unavailable",
+                reasons[0] if len(reasons) == 1 else "steam_price_metadata_unavailable",
+                str(exc),
+                unknown_appids=sorted(exc.failures),
+            )
+            return 3
         except ItadRateLimitError as exc:
             emit_error(
                 "price_data_unavailable",

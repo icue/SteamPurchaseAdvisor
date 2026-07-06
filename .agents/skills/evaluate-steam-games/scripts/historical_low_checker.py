@@ -3,14 +3,10 @@
 import argparse
 import json
 import sys
-import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
 
 SHARED_LIB = Path(__file__).resolve().parents[3] / "lib"
@@ -23,16 +19,20 @@ from steam_purchase_advisor.config import (  # noqa: E402
 )
 from steam_purchase_advisor.itad_client import (  # noqa: E402
     STEAM_SHOP_ID,
-    USER_AGENT,
     ItadRateLimitError,
     get,
     parse_country_argument,
     post,
 )
+from steam_purchase_advisor.steam_price_identity import (  # noqa: E402
+    PriceIdentityError,
+    SteamAppDetails,
+    SteamAppDetailsError,
+    fetch_steam_appdetails,
+    select_itad_price_identity,
+)
 
 
-STEAM_APPDETAILS_URL = "https://store.steampowered.com/api/appdetails"
-STEAM_RETRY_DELAYS = (1.0, 2.0)
 HISTORICAL_BUNDLE_LIMIT = 3
 RECENT_BUNDLE_DAYS = 365
 RECURRENT_BUNDLE_DAYS = 730
@@ -51,90 +51,25 @@ def parse_appid(value: str) -> str:
     return appid
 
 
-def parse_package_id(value: Any) -> str | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int) and value > 0:
-        return str(value)
-    if isinstance(value, str) and value.isascii() and value.isdigit() and int(value) > 0:
-        return str(int(value))
-    return None
-
-
-def fetch_steam_products(appid: str, country: str) -> list[str]:
-    params = urlencode({"appids": appid, "cc": country, "l": "english"})
-    request = Request(
-        f"{STEAM_APPDETAILS_URL}?{params}",
-        headers={"Accept": "application/json", "User-Agent": USER_AGENT},
-    )
-    last_error: Exception | None = None
-
-    for attempt in range(len(STEAM_RETRY_DELAYS) + 1):
-        try:
-            with urlopen(request, timeout=30) as response:
-                payload = json.load(response)
-            entry = payload.get(appid) if isinstance(payload, dict) else None
-            data = entry.get("data") if isinstance(entry, dict) and entry.get("success") else None
-            if not isinstance(data, dict):
-                raise RuntimeError("Steam returned no app details.")
-
-            package_ids: list[str] = []
-            for value in data.get("packages", []):
-                package_id = parse_package_id(value)
-                if package_id:
-                    package_ids.append(package_id)
-
-            for group in data.get("package_groups", []):
-                if not isinstance(group, dict):
-                    continue
-                for sub in group.get("subs", []):
-                    if not isinstance(sub, dict):
-                        continue
-                    package_id = parse_package_id(sub.get("packageid"))
-                    if package_id:
-                        package_ids.append(package_id)
-
-            products = [f"app/{appid}"]
-            products.extend(f"sub/{package_id}" for package_id in package_ids)
-            return list(dict.fromkeys(products))
-        except HTTPError as exc:
-            last_error = exc
-            retryable = exc.code == 429 or 500 <= exc.code < 600
-            if not retryable or attempt == len(STEAM_RETRY_DELAYS):
-                break
-        except (URLError, TimeoutError, OSError, ValueError, RuntimeError) as exc:
-            last_error = exc
-            if attempt == len(STEAM_RETRY_DELAYS):
-                break
-
-        time.sleep(STEAM_RETRY_DELAYS[attempt])
-
-    detail = str(last_error) if last_error else "unknown error"
-    raise RuntimeError(f"Steam package discovery failed: {detail}")
-
-
 def resolve_steam_products_to_itad_ids(
-    api_key: str, appid: str, products: list[str]
-) -> tuple[str | None, list[str]]:
+    api_key: str, products: list[str]
+) -> tuple[dict[str, str], list[str]]:
     data = post(f"/lookup/id/shop/{STEAM_SHOP_ID}/v1", api_key, products)
     if not isinstance(data, dict):
         raise RuntimeError("ITAD returned an invalid product lookup response.")
 
-    primary_id = data.get(f"app/{appid}")
-    if not isinstance(primary_id, str) or not primary_id:
-        primary_id = None
-
-    aliases: list[str] = []
+    product_to_itad_id: dict[str, str] = {}
     for product in products:
         itad_id = data.get(product)
         if isinstance(itad_id, str) and itad_id:
-            aliases.append(itad_id)
-    return primary_id, list(dict.fromkeys(aliases))
+            product_to_itad_id[product] = itad_id
+    aliases = list(dict.fromkeys(product_to_itad_id.values()))
+    return product_to_itad_id, aliases
 
 
-def get_price_overview(
+def get_price_overviews(
     api_key: str, itad_ids: list[str], country: str
-) -> dict[str, Any]:
+) -> dict[str, dict[str, Any]]:
     data = post(
         "/games/overview/v2",
         api_key,
@@ -145,11 +80,14 @@ def get_price_overview(
             "vouchers": "false",
         },
     )
-    prices = data.get("prices", []) if isinstance(data, dict) else []
+    if not isinstance(data, dict) or not isinstance(data.get("prices"), list):
+        raise RuntimeError("ITAD returned an invalid price-overview response.")
+    prices = data["prices"]
+    overviews: dict[str, dict[str, Any]] = {}
     for price in prices:
         if isinstance(price, dict) and price.get("id") in itad_ids:
-            return price
-    raise RuntimeError(f"No price overview returned for ITAD game IDs {itad_ids}.")
+            overviews[price["id"]] = price
+    return overviews
 
 
 def get_steam_store_low(
@@ -211,6 +149,17 @@ def extract_sale_episodes(
     low_price: dict[str, Any] | None = None
     low_timestamp: str | None = None
     low_amount: Decimal | None = None
+    episode_regular_price: dict[str, Any] | None = None
+    episode_regular_amount: Decimal | None = None
+
+    def append_episode(end_timestamp: Any) -> None:
+        episodes.append({
+            "start_timestamp": episode_start,
+            "end_timestamp": end_timestamp,
+            "low_price": low_price,
+            "low_timestamp": low_timestamp,
+            "regular_price": episode_regular_price,
+        })
 
     for entry in sorted_history:
         if not isinstance(entry, dict):
@@ -220,12 +169,7 @@ def extract_sale_episodes(
 
         if deal is None:
             if in_sale:
-                episodes.append({
-                    "start_timestamp": episode_start,
-                    "end_timestamp": timestamp,
-                    "low_price": low_price,
-                    "low_timestamp": low_timestamp,
-                })
+                append_episode(timestamp)
                 in_sale = False
             continue
 
@@ -255,33 +199,29 @@ def extract_sale_episodes(
         is_discounted = price_amount < regular_amount
 
         if is_discounted:
+            if in_sale and regular_amount != episode_regular_amount:
+                append_episode(timestamp)
+                in_sale = False
+
             if not in_sale:
                 in_sale = True
                 episode_start = timestamp
                 low_amount = price_amount
                 low_price = extract_money(price_data)
                 low_timestamp = timestamp
-            elif price_amount < low_amount:
+                episode_regular_amount = regular_amount
+                episode_regular_price = extract_money(regular_data)
+            elif low_amount is None or price_amount < low_amount:
                 low_amount = price_amount
                 low_price = extract_money(price_data)
                 low_timestamp = timestamp
         else:
             if in_sale:
-                episodes.append({
-                    "start_timestamp": episode_start,
-                    "end_timestamp": timestamp,
-                    "low_price": low_price,
-                    "low_timestamp": low_timestamp,
-                })
+                append_episode(timestamp)
                 in_sale = False
 
     if in_sale:
-        episodes.append({
-            "start_timestamp": episode_start,
-            "end_timestamp": None,
-            "low_price": low_price,
-            "low_timestamp": low_timestamp,
-        })
+        append_episode(None)
 
     return episodes
 
@@ -355,16 +295,27 @@ def find_recurring_regime_sale_price(
 
     for episode in episodes:
         low = episode.get("low_price")
+        regular = episode.get("regular_price")
         if not isinstance(low, dict) or low.get("currency") != current_regular_currency:
+            continue
+        if (
+            not isinstance(regular, dict)
+            or regular.get("currency") != current_regular_currency
+        ):
             continue
         ts = parse_itad_datetime(episode.get("low_timestamp"))
         if ts is None:
             continue
         try:
             ep_amount = Decimal(str(low["amount"]))
+            ep_regular_amount = Decimal(str(regular["amount"]))
         except (ValueError, ArithmeticError, KeyError):
             continue
-        if not ep_amount.is_finite():
+        if (
+            not ep_amount.is_finite()
+            or not ep_regular_amount.is_finite()
+            or ep_regular_amount != current_regular_amount
+        ):
             continue
         key = str(ep_amount)
         price_episodes.setdefault(key, []).append(ts)
@@ -396,7 +347,7 @@ def detect_list_price_change(
         key=lambda h: parse_itad_datetime(h.get("timestamp")) or datetime.min.replace(tzinfo=timezone.utc),
     )
 
-    runs: list[dict[str, Any]] = []
+    observations: list[dict[str, Any]] = []
     for entry in sorted_history:
         if not isinstance(entry, dict):
             continue
@@ -421,48 +372,21 @@ def detect_list_price_change(
         if not reg_amount.is_finite():
             continue
 
-        run_key = (str(reg_amount), currency)
-        if runs and (runs[-1]["amount_str"], runs[-1]["currency"]) == run_key:
-            runs[-1]["last_ts"] = ts
-        else:
-            runs.append({
-                "amount_str": str(reg_amount),
-                "currency": currency,
-                "first_ts": ts,
-                "last_ts": ts,
-            })
-
-    if len(runs) < 2:
-        return {"type": "insufficient"}
-
-    filtered: list[dict[str, Any]] = []
-    i = 0
-    while i < len(runs):
-        if (
-            0 < i < len(runs) - 1
-            and (runs[i]["last_ts"] - runs[i]["first_ts"]).total_seconds() < 30 * 86400
-            and (runs[i - 1]["amount_str"], runs[i - 1]["currency"])
-            == (runs[i + 1]["amount_str"], runs[i + 1]["currency"])
-        ):
-            if filtered and (
-                (filtered[-1]["amount_str"], filtered[-1]["currency"])
-                == (runs[i + 1]["amount_str"], runs[i + 1]["currency"])
+        observation = {
+            "amount_str": str(reg_amount),
+            "currency": currency,
+            "timestamp": ts,
+        }
+        if observations and observations[-1]["timestamp"] == ts:
+            if (
+                observations[-1]["amount_str"] != observation["amount_str"]
+                or observations[-1]["currency"] != observation["currency"]
             ):
-                filtered[-1]["last_ts"] = runs[i + 1]["last_ts"]
-                i += 2
-                continue
-            i += 1
+                return {"type": "ambiguous"}
             continue
-        if filtered and (
-            (filtered[-1]["amount_str"], filtered[-1]["currency"])
-            == (runs[i]["amount_str"], runs[i]["currency"])
-        ):
-            filtered[-1]["last_ts"] = runs[i]["last_ts"]
-        else:
-            filtered.append(dict(runs[i]))
-        i += 1
+        observations.append(observation)
 
-    if len(filtered) < 2:
+    if not observations:
         return {"type": "insufficient"}
 
     try:
@@ -471,47 +395,74 @@ def detect_list_price_change(
     except (ValueError, ArithmeticError, KeyError):
         return {"type": "ambiguous"}
 
-    for idx in range(len(filtered) - 1, 0, -1):
-        new_run = filtered[idx]
-        old_run = filtered[idx - 1]
+    if not current_reg_amount.is_finite() or not isinstance(current_reg_currency, str):
+        return {"type": "ambiguous"}
 
-        new_amount = Decimal(new_run["amount_str"])
-        new_currency = new_run["currency"]
-
-        if new_amount != current_reg_amount or new_currency != current_reg_currency:
+    runs: list[dict[str, Any]] = []
+    for observation in observations:
+        run_key = (observation["amount_str"], observation["currency"])
+        if runs and (runs[-1]["amount_str"], runs[-1]["currency"]) == run_key:
             continue
+        runs.append({
+            "amount_str": observation["amount_str"],
+            "currency": observation["currency"],
+            "first_ts": observation["timestamp"],
+        })
 
-        duration = (now - new_run["first_ts"]).total_seconds()
-        if duration < 30 * 86400:
-            continue
+    terminal = runs[-1]
+    terminal_amount = Decimal(terminal["amount_str"])
+    if (
+        terminal_amount != current_reg_amount
+        or terminal["currency"] != current_reg_currency
+        or terminal["first_ts"] > now
+    ):
+        return {"type": "ambiguous"}
 
-        old_amount = Decimal(old_run["amount_str"])
-        old_currency = old_run["currency"]
+    minimum_duration = 30 * 86400
+    sustained: list[dict[str, Any]] = []
+    for index, run in enumerate(runs):
+        end_ts = runs[index + 1]["first_ts"] if index + 1 < len(runs) else now
+        duration = (end_ts - run["first_ts"]).total_seconds()
+        if duration >= minimum_duration:
+            sustained.append(run)
 
-        if old_currency != new_currency:
-            return {"type": "ambiguous"}
+    terminal_duration = (now - terminal["first_ts"]).total_seconds()
+    if terminal_duration < minimum_duration:
+        return {"type": "insufficient"}
 
-        if old_amount == new_amount:
-            continue
+    if len(sustained) < 2:
+        return {"type": "none"}
 
-        direction = "increase" if new_amount > old_amount else "decrease"
-        if old_amount > Decimal("0"):
-            pct = abs(new_amount - old_amount) / old_amount * Decimal("100")
-            pct = pct.quantize(Decimal("0.01"))
-        else:
-            pct = None
+    old_run = sustained[-2]
+    new_run = sustained[-1]
+    if new_run is not terminal:
+        return {"type": "insufficient"}
 
-        return {
-            "type": "confirmed",
-            "direction": direction,
-            "from_amount": json_number(old_amount),
-            "to_amount": json_number(new_amount),
-            "currency": new_currency,
-            "date": new_run["first_ts"].strftime("%Y-%m-%d"),
-            "percentage": json_number(pct) if pct is not None else None,
-        }
+    old_amount = Decimal(old_run["amount_str"])
+    new_amount = Decimal(new_run["amount_str"])
+    old_currency = old_run["currency"]
+    new_currency = new_run["currency"]
+    if old_currency != new_currency:
+        return {"type": "ambiguous"}
+    if old_amount == new_amount:
+        return {"type": "none"}
 
-    return {"type": "none"}
+    direction = "increase" if new_amount > old_amount else "decrease"
+    if old_amount > Decimal("0"):
+        pct = abs(new_amount - old_amount) / old_amount * Decimal("100")
+        pct = pct.quantize(Decimal("0.01"))
+    else:
+        pct = None
+
+    return {
+        "type": "confirmed",
+        "direction": direction,
+        "from_amount": json_number(old_amount),
+        "to_amount": json_number(new_amount),
+        "currency": new_currency,
+        "date": new_run["first_ts"].strftime("%Y-%m-%d"),
+        "percentage": json_number(pct) if pct is not None else None,
+    }
 
 
 def steam_history_unavailable_fields(
@@ -614,6 +565,28 @@ def require_comparable_prices(
         )
 
 
+def steam_low_unavailable_fields(
+    reason: str,
+    message: str,
+    *,
+    retry_after: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "steam_low_status": "unavailable",
+        "steam_low_reason": reason,
+        "steam_low_message": message,
+        "steam_low_retry_after": retry_after,
+        "historical_low_price": None,
+        "steam_low_timestamp": None,
+        "steam_low_regular": None,
+        "steam_low_cut": None,
+        "is_historical_low": None,
+        "steam_low_comparison_status": "unavailable",
+        "steam_low_comparison_reason": reason,
+        "steam_low_comparison_message": message,
+    }
+
+
 def price_unavailable_fields(
     reason: str,
     message: str,
@@ -634,11 +607,8 @@ def price_unavailable_fields(
         "current_price": None,
         "regular_price": None,
         "discount_percent": None,
-        "historical_low_price": None,
         "price_scope": "steam",
-        "steam_low_timestamp": None,
-        "steam_low_regular": None,
-        "steam_low_cut": None,
+        **steam_low_unavailable_fields(reason, message, retry_after=retry_after),
         "steam_history_status": "unavailable",
         "steam_history_reason": reason,
         "steam_history_message": message,
@@ -713,22 +683,31 @@ def unavailable_result(
 
 def build_price_result(
     api_key: str,
-    primary_itad_id: str | None,
+    steam_details: SteamAppDetails | None,
+    steam_details_error: SteamAppDetailsError | None,
+    product_to_itad_id: dict[str, str],
     itad_aliases: list[str],
     country: str,
     report_country: str | None,
     report_country_error: str | None,
 ) -> dict[str, Any]:
-    if primary_itad_id is None and not itad_aliases:
+    if steam_details is None:
         return price_unavailable_fields(
-            "itad_request_failed",
-            "Could not resolve the Steam app product to an ITAD game ID.",
+            "steam_price_metadata_unavailable",
+            str(steam_details_error or "Steam regional price metadata is unavailable."),
+            country,
+            report_country,
+            report_country_error=report_country_error,
+        )
+    if not itad_aliases:
+        return price_unavailable_fields(
+            "steam_price_identity_unresolved",
+            "Could not resolve any Steam app or package product to an ITAD game ID.",
             country,
             report_country,
             report_country_error=report_country_error,
         )
 
-    target_itad_id = primary_itad_id or itad_aliases[0]
     result = price_unavailable_fields(
         "itad_request_failed",
         "Could not resolve price data.",
@@ -740,11 +719,20 @@ def build_price_result(
     current_price = None
     regular_price = None
 
-    # --- Phase 1: current price from overview (Steam-filtered) ---
+    # --- Phase 1: deterministically select a Steam-matching ITAD identity ---
     try:
-        overview = get_price_overview(api_key, itad_aliases or [primary_itad_id], country)
-        target_itad_id = overview["id"]
-        current_offer = overview.get("current")
+        overviews = get_price_overviews(api_key, itad_aliases, country)
+        offers_by_itad_id = {
+            itad_id: [overview["current"]]
+            for itad_id, overview in overviews.items()
+            if isinstance(overview.get("current"), dict)
+        }
+        selection = select_itad_price_identity(
+            steam_details, product_to_itad_id, offers_by_itad_id
+        )
+        target_itad_id = selection.itad_id
+        overview = overviews[target_itad_id]
+        current_offer = selection.offer
         current_price = extract_price(current_offer)
         regular_price = extract_money(
             current_offer.get("regular") if isinstance(current_offer, dict) else None
@@ -764,6 +752,14 @@ def build_price_result(
             "regular_price": regular_price,
             "discount_percent": discount_percent,
         })
+    except PriceIdentityError as exc:
+        return price_unavailable_fields(
+            exc.reason,
+            str(exc),
+            country,
+            report_country,
+            report_country_error=report_country_error,
+        )
     except ItadRateLimitError as exc:
         return price_unavailable_fields(
             "itad_rate_limited",
@@ -774,38 +770,83 @@ def build_price_result(
             retry_after=exc.retry_after,
         )
     except (RuntimeError, OSError, ValueError) as exc:
-        result.update({
-            "reason": "itad_request_failed",
-            "message": str(exc),
-        })
+        return price_unavailable_fields(
+            "itad_request_failed",
+            str(exc),
+            country,
+            report_country,
+            report_country_error=report_country_error,
+        )
 
     # --- Phase 2: Steam store low ---
     steam_low_price: dict[str, Any] | None = None
     try:
         store_low = get_steam_store_low(api_key, target_itad_id, country)
-        if store_low is not None:
+        if store_low is None:
+            result.update(steam_low_unavailable_fields(
+                "steam_low_not_returned",
+                "ITAD returned no Steam Store historical low for the selected identity.",
+            ))
+        else:
             steam_low_price = extract_money(store_low.get("price"))
-            ts_raw = store_low.get("timestamp")
-            ts_parsed = parse_itad_datetime(ts_raw)
-            cut_val = store_low.get("cut")
-            
+            if steam_low_price is None:
+                raise ValueError("ITAD returned a Steam Store low without a valid price.")
+            ts_parsed = parse_itad_datetime(store_low.get("timestamp"))
+            cut_value = store_low.get("cut")
+            try:
+                steam_low_cut = int(cut_value) if cut_value is not None else None
+            except (TypeError, ValueError):
+                steam_low_cut = None
+
             result.update({
+                "steam_low_status": "available",
+                "steam_low_reason": None,
+                "steam_low_message": None,
+                "steam_low_retry_after": None,
                 "historical_low_price": steam_low_price,
                 "price_scope": "steam",
                 "steam_low_timestamp": ts_parsed.isoformat() if ts_parsed else None,
                 "steam_low_regular": extract_money(store_low.get("regular")),
-                "steam_low_cut": int(cut_val) if cut_val is not None else None,
+                "steam_low_cut": steam_low_cut,
             })
-            if steam_low_price is not None and current_price is not None:
-                try:
-                    require_comparable_prices(current_price, steam_low_price)
-                    result["is_historical_low"] = Decimal(str(current_price["amount"])) <= Decimal(str(steam_low_price["amount"]))
-                except RuntimeError:
-                    pass
-    except ItadRateLimitError:
-        pass
-    except (RuntimeError, OSError, ValueError):
-        pass
+            try:
+                require_comparable_prices(current_price, steam_low_price)
+                current_amount = Decimal(str(current_price["amount"]))
+                low_amount = Decimal(str(steam_low_price["amount"]))
+                if not current_amount.is_finite() or not low_amount.is_finite():
+                    raise ValueError("Current or historical-low amount is not finite.")
+                result.update({
+                    "is_historical_low": current_amount <= low_amount,
+                    "steam_low_comparison_status": "available",
+                    "steam_low_comparison_reason": None,
+                    "steam_low_comparison_message": None,
+                })
+            except RuntimeError as exc:
+                result.update({
+                    "is_historical_low": None,
+                    "steam_low_comparison_status": "unavailable",
+                    "steam_low_comparison_reason": "steam_low_currency_mismatch",
+                    "steam_low_comparison_message": str(exc),
+                })
+            except (ValueError, ArithmeticError, KeyError) as exc:
+                result.update({
+                    "is_historical_low": None,
+                    "steam_low_comparison_status": "unavailable",
+                    "steam_low_comparison_reason": "steam_low_comparison_failed",
+                    "steam_low_comparison_message": str(exc),
+                })
+    except ItadRateLimitError as exc:
+        result.update(steam_low_unavailable_fields(
+            "itad_rate_limited", str(exc), retry_after=exc.retry_after
+        ))
+    except ValueError as exc:
+        result.update(steam_low_unavailable_fields(
+            "steam_low_invalid_response", str(exc)
+        ))
+    except (RuntimeError, OSError) as exc:
+        result.update(steam_low_unavailable_fields(
+            "itad_request_failed", str(exc)
+        ))
 
     # --- Phase 3: Steam price history ---
     now = datetime.now(timezone.utc)
@@ -1295,16 +1336,20 @@ def main() -> int:
 
     package_status = "available"
     package_error: str | None = None
+    steam_details: SteamAppDetails | None = None
+    steam_details_error: SteamAppDetailsError | None = None
     try:
-        steam_products = fetch_steam_products(args.appid, country)
-    except RuntimeError as exc:
+        steam_details = fetch_steam_appdetails(args.appid, country)
+        steam_products = list(steam_details.all_products)
+    except SteamAppDetailsError as exc:
         steam_products = [f"app/{args.appid}"]
         package_status = "unavailable"
         package_error = str(exc)
+        steam_details_error = exc
 
     try:
-        primary_itad_id, aliases = resolve_steam_products_to_itad_ids(
-            api_key, args.appid, steam_products
+        product_to_itad_id, aliases = resolve_steam_products_to_itad_ids(
+            api_key, steam_products
         )
     except ItadRateLimitError as exc:
         print(
@@ -1340,7 +1385,9 @@ def main() -> int:
 
     price_result = build_price_result(
         api_key,
-        primary_itad_id,
+        steam_details,
+        steam_details_error,
+        product_to_itad_id,
         aliases,
         country,
         report_country,

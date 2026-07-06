@@ -74,7 +74,7 @@ For a verified `early-access` game, retain `release_date_display` as the current
 
 ## Select countries, language, and titles
 
-- Use `pricing_country` for ITAD regional prices. Ask for it only when ITAD is configured and the value is missing or invalid.
+- Use `pricing_country` for both Steam AppDetails (`cc`) and ITAD regional prices. Do not pass or configure a currency: require Steam's returned currency to match ITAD's returned currency exactly and never convert between them. Ask for `pricing_country` only when ITAD is configured and the value is missing or invalid.
 - Use `report_country` to choose the report language. Ask when it is missing or invalid, and ask for a specific language when the country is multilingual.
 - Resolve one exact runtime `report_language` and matching Steam language code before preflight or workers.
 
@@ -115,12 +115,13 @@ python -B <skill-dir>/scripts/historical_low_checker.py --appid <appid> [--count
 
 Standalone price, sale, and historical-low analysis covers only the Steam Store (`price_scope: "steam"`). Bundles are the explicit non-Steam exception and retain their existing multi-store coverage.
 
-- When `price_status` is `available`, use `current_price` and the Steam-store-only `historical_low_price`; `regular_price` and `discount_percent` may independently be null.
+- When `price_status` is `available`, use `current_price`; `regular_price` and `discount_percent` may independently be null. Use the Steam-store-only `historical_low_price` only when `steam_low_status` is `available`, and compare it with the current price only when `steam_low_comparison_status` is `available`.
 - When it is `unavailable`, preserve `reason`, mark every price signal unavailable, and continue. For `itad_rate_limited`, honor `retry_after` when practical and retry once. Treat other ITAD failures as non-fatal.
 - If the key is missing, explain that local `itad_api_key` configuration enables pricing and bundle context.
-- Current price, Steam store low, Steam history, and bundles fail independently; a failure in one does not suppress valid evidence from the others.
+- Preserve `steam_low_reason`, `steam_low_message`, and `steam_low_retry_after` when the Steam low is unavailable. Preserve `steam_low_comparison_reason` and `steam_low_comparison_message` when a valid low cannot be compared with the current price.
+- Current price, Steam store low, Steam-low comparison, Steam history, and bundles fail independently; a failure in one does not suppress valid evidence from the others.
 
-The script resolves the Steam app product and associated Steam package products in one ITAD lookup. It preserves the app-linked ITAD identity for standalone pricing, queries bundle history for every distinct resolved identity, and deduplicates bundles by ITAD bundle ID. This recovers history attached to a package identity rather than the current app identity.
+The script resolves the Steam app product and associated Steam package products in one ITAD lookup. For standalone pricing, it requires ITAD's current Steam offer to match the regional Steam AppDetails currency plus initial and final minor-unit amounts. Prefer the matching app identity. Only when it does not match, accept a base-price package from Steam's purchase options; accept multiple matching packages only when they map to one ITAD identity, and otherwise mark standalone pricing ambiguous. Never choose by ITAD response order or title. Query store low and history only for the selected identity. Query bundle history for every distinct resolved identity and deduplicate bundles by ITAD bundle ID.
 
 - When `bundle_status` is `available`, use `bundle_summary`, every `active_bundles` and `unknown_bundles` entry, and the already-limited `historical_bundles` list. A complete zero count means ITAD returned no known bundle and all bundle content must be omitted.
 - When `bundle_status` is `partial`, use the returned active, historical, and unknown-status bundles but disclose the precise coverage failure under evidence limitations. Do not turn partial coverage into a no-bundle claim.
@@ -424,4 +425,4 @@ End each report with a naturally localized, action-oriented `🔍 Explore furthe
 
 ## Respect the ITAD request limit
 
-Treat ITAD's 1,000 requests per rolling five minutes as one shared API-key budget across workers, wishlist handoffs, and concurrent runs. For each game, estimate `4 + A` normal ITAD requests, where `A` is the number of distinct ITAD identities resolved from its Steam app and package products: one product lookup, one Steam-filtered price overview, one Steam store low, one Steam price history, and one bundle-history request per identity. Allow up to `A` additional active-bundle requests only when expiry values are missing or malformed. The Steam package-discovery request does not consume the ITAD quota. Include known prior consumption, reserve a safety margin, and never give each worker a separate allowance.
+Treat ITAD's 1,000 requests per rolling five minutes as one shared API-key budget across workers, wishlist handoffs, and concurrent runs. For each game, estimate `4 + A` normal ITAD requests, where `A` is the number of distinct ITAD identities resolved from its Steam app and package products: one product lookup, one Steam-filtered price overview, one Steam store low, one Steam price history, and one bundle-history request per identity. Allow up to `A` additional active-bundle requests only when expiry values are missing or malformed. The one regional Steam AppDetails request used for identity validation does not consume the ITAD quota. Include known prior consumption, reserve a safety margin, and never give each worker a separate allowance.

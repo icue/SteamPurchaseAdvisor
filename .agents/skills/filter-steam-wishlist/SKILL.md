@@ -102,6 +102,10 @@ Map generic list and show requests to the complete wishlist. Apply a sale, histo
 
 Sale and historical-low filters restrict results to Steam Store deals (`shop_id=61`, `vouchers=false`). The `--historical-low-only` flag compares each Steam deal's current price against its per-store low, not a cross-store historical low.
 
+For every price-filter candidate, pass `pricing_country` to Steam AppDetails as `cc`; do not pass or configure a currency. Require ITAD's Steam offer to match Steam's returned currency plus initial and final minor-unit amounts exactly. Prefer the matching `app/<appid>` identity. Fall back only to a base-price package in Steam's purchase options. Accept several matching packages only when they map to the same ITAD identity; omit an item when distinct package identities remain ambiguous or no identity matches. Never choose by ITAD response order or title, and never convert currencies.
+
+Fetch regional AppDetails for every wishlist item with bounded retries and at most four concurrent requests. If any request remains unavailable or malformed, return `price_data_unavailable` without a partial price-filtered result. Treat a successful AppDetails response without a discounted purchasable price as not on sale.
+
 The script applies release-state filtering after price filtering and preserves wishlist order. It uses Steam Store appdetails metadata: genre ID `70` means Early Access, a non-coming-soon app without genre ID `70` means full release, and coming-soon apps match neither filtered state. When any candidate cannot be classified, the script returns `release_state_data_unavailable` and no partial result; stop and report that the release-state filter could not be applied.
 
 Parse successful stdout internally as a JSON array of numeric app IDs. For a list request, resolve and present titles as described below. For an analysis request, hand the selected IDs to `evaluate-steam-games`. Before handing off a complete unfiltered wishlist, report its size and ask the user to analyze all games or choose a subset.
@@ -125,7 +129,7 @@ python -B <repo-root>/.agents/lib/steam_purchase_advisor/resolve_steam_titles.py
 Price filtering requires `itad_api_key` and `pricing_country`.
 
 - If the key is configured but the country is missing or invalid, ask for an uppercase two-letter country code and pass `--country <CC>`.
-- If a filtered run returns `price_data_unavailable` because of a missing or invalid key, authentication or network failure, or rate limit, explain that current price, discount, and historical-low data are unavailable. Honor `Retry-After` once when practical.
+- If a filtered run returns `price_data_unavailable` because of a missing or invalid key, ITAD authentication or network failure, Steam AppDetails failure, or rate limit, explain that current price, discount, and historical-low data are unavailable. Honor `Retry-After` once when practical.
 - Rerun with `--no-on-sale-only` after an unresolved ITAD failure, preserving any explicit `--release-state` selection. If the user requested sale or historical-low filtering, state prominently that the price filter was not applied and never describe the fallback as price-filtered.
 - Present list requests through the title resolver. Before handing a price-unfiltered fallback to `evaluate-steam-games`, report its size and require confirmation of all games or a subset.
 
@@ -135,6 +139,6 @@ Release-state filtering uses Steam Store metadata independently of ITAD. When it
 
 Treat country codes as regional price selectors, not currency codes. Never convert currencies or apply one country's result to another.
 
-Treat ITAD's 1,000 requests per rolling five minutes as one shared API-key budget. Estimate this script's upper bound as `2 * ceil(wishlist app IDs / 200)` requests; unfiltered mode uses none. Reserve a safety margin, honor rate limits, and pass known consumption to `evaluate-steam-games` on handoff.
+Treat ITAD's 1,000 requests per rolling five minutes as one shared API-key budget. Let `P` be the number of distinct app and eligible base-package products discovered for wishlist games that Steam reports as discounted. Estimate this script's upper bound as `2 * ceil(P / 200)` ITAD requests: one product-lookup pass and one price pass; unfiltered mode uses none. Reserve a safety margin, honor rate limits, and pass known consumption to `evaluate-steam-games` on handoff.
 
-When release-state filtering is requested, expect at most one initial Steam Store appdetails request per candidate remaining after price filtering. The script uses at most four concurrent Store requests and bounded retries. Release-state-only requests do not require an ITAD key or `pricing_country`.
+Price filtering uses one regional Steam Store AppDetails request per wishlist item. When release-state filtering is also requested, expect one additional AppDetails request per candidate remaining after price filtering. The script uses at most four concurrent Store requests and bounded retries. Release-state-only requests do not require an ITAD key or `pricing_country`.
