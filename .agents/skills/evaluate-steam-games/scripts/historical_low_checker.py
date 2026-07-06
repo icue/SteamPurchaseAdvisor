@@ -718,6 +718,7 @@ def build_price_result(
 
     current_price = None
     regular_price = None
+    target_itad_id = itad_aliases[0] if len(itad_aliases) == 1 else None
 
     # --- Phase 1: deterministically select a Steam-matching ITAD identity ---
     try:
@@ -753,13 +754,15 @@ def build_price_result(
             "discount_percent": discount_percent,
         })
     except PriceIdentityError as exc:
-        return price_unavailable_fields(
+        result = price_unavailable_fields(
             exc.reason,
             str(exc),
             country,
             report_country,
             report_country_error=report_country_error,
         )
+        if target_itad_id is None:
+            return result
     except ItadRateLimitError as exc:
         return price_unavailable_fields(
             "itad_rate_limited",
@@ -770,13 +773,15 @@ def build_price_result(
             retry_after=exc.retry_after,
         )
     except (RuntimeError, OSError, ValueError) as exc:
-        return price_unavailable_fields(
+        result = price_unavailable_fields(
             "itad_request_failed",
             str(exc),
             country,
             report_country,
             report_country_error=report_country_error,
         )
+        if target_itad_id is None:
+            return result
 
     # --- Phase 2: Steam store low ---
     steam_low_price: dict[str, Any] | None = None
@@ -809,32 +814,43 @@ def build_price_result(
                 "steam_low_regular": extract_money(store_low.get("regular")),
                 "steam_low_cut": steam_low_cut,
             })
-            try:
-                require_comparable_prices(current_price, steam_low_price)
-                current_amount = Decimal(str(current_price["amount"]))
-                low_amount = Decimal(str(steam_low_price["amount"]))
-                if not current_amount.is_finite() or not low_amount.is_finite():
-                    raise ValueError("Current or historical-low amount is not finite.")
-                result.update({
-                    "is_historical_low": current_amount <= low_amount,
-                    "steam_low_comparison_status": "available",
-                    "steam_low_comparison_reason": None,
-                    "steam_low_comparison_message": None,
-                })
-            except RuntimeError as exc:
+            if current_price is None:
                 result.update({
                     "is_historical_low": None,
                     "steam_low_comparison_status": "unavailable",
-                    "steam_low_comparison_reason": "steam_low_currency_mismatch",
-                    "steam_low_comparison_message": str(exc),
+                    "steam_low_comparison_reason": "current_price_unavailable",
+                    "steam_low_comparison_message": (
+                        "The Steam Store low is available, but no current price is "
+                        "available for comparison."
+                    ),
                 })
-            except (ValueError, ArithmeticError, KeyError) as exc:
-                result.update({
-                    "is_historical_low": None,
-                    "steam_low_comparison_status": "unavailable",
-                    "steam_low_comparison_reason": "steam_low_comparison_failed",
-                    "steam_low_comparison_message": str(exc),
-                })
+            else:
+                try:
+                    require_comparable_prices(current_price, steam_low_price)
+                    current_amount = Decimal(str(current_price["amount"]))
+                    low_amount = Decimal(str(steam_low_price["amount"]))
+                    if not current_amount.is_finite() or not low_amount.is_finite():
+                        raise ValueError("Current or historical-low amount is not finite.")
+                    result.update({
+                        "is_historical_low": current_amount <= low_amount,
+                        "steam_low_comparison_status": "available",
+                        "steam_low_comparison_reason": None,
+                        "steam_low_comparison_message": None,
+                    })
+                except RuntimeError as exc:
+                    result.update({
+                        "is_historical_low": None,
+                        "steam_low_comparison_status": "unavailable",
+                        "steam_low_comparison_reason": "steam_low_currency_mismatch",
+                        "steam_low_comparison_message": str(exc),
+                    })
+                except (ValueError, ArithmeticError, KeyError) as exc:
+                    result.update({
+                        "is_historical_low": None,
+                        "steam_low_comparison_status": "unavailable",
+                        "steam_low_comparison_reason": "steam_low_comparison_failed",
+                        "steam_low_comparison_message": str(exc),
+                    })
     except ItadRateLimitError as exc:
         result.update(steam_low_unavailable_fields(
             "itad_rate_limited", str(exc), retry_after=exc.retry_after

@@ -204,16 +204,35 @@ def fetch_title(appid: int, report_country: str, language: str) -> dict[str, Any
         headers={"Accept": "application/json", "User-Agent": USER_AGENT},
     )
 
+    def unavailable(error: str) -> dict[str, Any]:
+        return {
+            "appid": appid,
+            "name": None,
+            "url": f"https://store.steampowered.com/app/{appid}/",
+            "error": error,
+        }
+
     attempts = len(RETRY_DELAYS) + 1
+    last_error = "steam_title_request_failed"
     for attempt in range(attempts):
         try:
             with urlopen(request, timeout=30) as response:
                 payload = json.load(response)
-            entry = payload.get(str(appid)) if isinstance(payload, dict) else None
-            data = entry.get("data") if isinstance(entry, dict) and entry.get("success") else None
+            if not isinstance(payload, dict):
+                return unavailable("steam_invalid_response")
+            entry = payload.get(str(appid))
+            if not isinstance(entry, dict):
+                return unavailable("steam_invalid_response")
+            if entry.get("success") is False:
+                return unavailable("steam_title_not_returned")
+            if entry.get("success") is not True:
+                return unavailable("steam_invalid_response")
+            data = entry.get("data")
+            if not isinstance(data, dict):
+                return unavailable("steam_invalid_response")
             name = data.get("name") if isinstance(data, dict) else None
             if not isinstance(name, str) or not name.strip():
-                raise RuntimeError("Steam returned no title.")
+                return unavailable("steam_title_not_returned")
             return {
                 "appid": appid,
                 "name": name.strip(),
@@ -225,21 +244,16 @@ def fetch_title(appid: int, report_country: str, language: str) -> dict[str, Any
             }
         except HTTPError as exc:
             retryable = exc.code == 429 or 500 <= exc.code < 600
-            if not retryable or attempt == attempts - 1:
-                return {
-                    "appid": appid,
-                    "name": None,
-                    "url": f"https://store.steampowered.com/app/{appid}/",
-                    "error": f"steam_http_{exc.code}",
-                }
-        except (URLError, TimeoutError, OSError, json.JSONDecodeError, RuntimeError):
-            if attempt == attempts - 1:
-                return {
-                    "appid": appid,
-                    "name": None,
-                    "url": f"https://store.steampowered.com/app/{appid}/",
-                    "error": "steam_title_request_failed",
-                }
+            last_error = f"steam_http_{exc.code}"
+            if not retryable:
+                return unavailable(last_error)
+        except json.JSONDecodeError:
+            last_error = "steam_invalid_response"
+        except (URLError, TimeoutError, OSError):
+            last_error = "steam_title_request_failed"
+
+        if attempt == attempts - 1:
+            return unavailable(last_error)
 
         time.sleep(RETRY_DELAYS[attempt])
 

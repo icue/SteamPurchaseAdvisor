@@ -104,7 +104,7 @@ Sale and historical-low filters restrict results to Steam Store deals (`shop_id=
 
 For every price-filter candidate, pass `pricing_country` to Steam AppDetails as `cc`; do not pass or configure a currency. Require ITAD's Steam offer to match Steam's returned currency plus initial and final minor-unit amounts exactly. Prefer the matching `app/<appid>` identity. Fall back only to a base-price package in Steam's purchase options. Accept several matching packages only when they map to the same ITAD identity; omit an item when distinct package identities remain ambiguous or no identity matches. Never choose by ITAD response order or title, and never convert currencies.
 
-Fetch regional AppDetails for every wishlist item with bounded retries and at most four concurrent requests. If any request remains unavailable or malformed, return `price_data_unavailable` without a partial price-filtered result. Treat a successful AppDetails response without a discounted purchasable price as not on sale.
+Fetch regional AppDetails for every wishlist item with bounded retries and at most four concurrent requests. Treat a missing or null `price_overview` as a valid unpriced result and therefore not on sale. Treat a present `price_overview` as malformed when its currency or initial/final minor-unit amounts are missing or invalid, or when its final amount exceeds its initial amount; return `price_data_unavailable` with reason `steam_price_metadata_malformed` and no partial price-filtered result. Treat a complete purchasable price without a discount as not on sale.
 
 The script applies release-state filtering after price filtering and preserves wishlist order. It uses Steam Store appdetails metadata: genre ID `70` means Early Access, a non-coming-soon app without genre ID `70` means full release, and coming-soon apps match neither filtered state. When any candidate cannot be classified, the script returns `release_state_data_unavailable` and no partial result; stop and report that the release-state filter could not be applied.
 
@@ -122,7 +122,7 @@ python -B <repo-root>/.agents/lib/steam_purchase_advisor/resolve_steam_titles.py
 - Treat Steam's returned title as authoritative. Preserve the publisher's original title when Steam has no localization; never machine-translate it.
 - Preserve result order. On an individual lookup failure, retain the game as linked `AppID <appid>`.
 - Present successful results as linked localized titles with AppIDs. Do not return a bare AppID array when title resolution succeeds.
-- Keep the resolver's default concurrency of four and maximum of eight. Lower it only for throttling or local constraints; retry only transient failures with backoff.
+- Keep the resolver's default concurrency of four and maximum of eight. Lower it only for throttling or local constraints. Retry HTTP 429 and 5xx responses, network or timeout failures, and malformed or truncated JSON with backoff. Do not retry other HTTP 4xx responses, `success: false`, structurally invalid valid-JSON responses, or missing or blank titles. Preserve the resolver's specific failure reason, including `steam_title_not_returned` and `steam_invalid_response`.
 
 ## Degrade when ITAD is unavailable
 

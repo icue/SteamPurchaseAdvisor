@@ -246,7 +246,17 @@ def fetch_price_metadata(
         for future in as_completed(futures):
             appid = futures[future]
             try:
-                details[appid] = future.result()
+                steam_details = future.result()
+                price_overview = steam_details.data.get("price_overview")
+                malformed_price = price_overview is not None and (
+                    not isinstance(price_overview, dict)
+                    or not steam_details.has_price
+                    or steam_details.final_amount_int > steam_details.initial_amount_int
+                )
+                if malformed_price:
+                    failures[appid] = "steam_price_metadata_malformed"
+                else:
+                    details[appid] = steam_details
             except SteamAppDetailsError as exc:
                 failures[appid] = exc.reason
             except Exception:
@@ -319,17 +329,11 @@ def get_filtered_sale_appids(
         except PriceIdentityError:
             continue
 
-        offer = selection.offer
-        try:
-            cut = Decimal(str(offer.get("cut")))
-        except (ValueError, ArithmeticError):
-            continue
-        if not cut.is_finite() or cut <= 0:
-            continue
         if not historical_low_only:
             matches.add(appid)
             continue
 
+        offer = selection.offer
         deal_price = offer.get("price")
         store_low = offer.get("storeLow")
         if not isinstance(deal_price, dict) or not isinstance(store_low, dict):
