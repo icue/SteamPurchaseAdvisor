@@ -123,8 +123,8 @@ Standalone price, sale, and historical-low analysis covers only the Steam Store 
 
 The script resolves the Steam app product and associated Steam package products in one ITAD lookup. For standalone pricing, it requires ITAD's current Steam offer to match the regional Steam AppDetails currency plus initial and final minor-unit amounts. Prefer the matching app identity. Only when it does not match, accept a base-price package from Steam's purchase options; accept multiple matching packages only when they map to one ITAD identity, and otherwise mark standalone pricing ambiguous. Never choose by ITAD response order or title. Query store low and history only for the selected identity. Query bundle history for every distinct resolved identity and deduplicate bundles by ITAD bundle ID.
 
-- When `bundle_status` is `available`, use `bundle_summary`, every `active_bundles` and `unknown_bundles` entry, and the already-limited `historical_bundles` list. A complete zero count means ITAD returned no known bundle and all bundle content must be omitted.
-- When `bundle_status` is `partial`, use the returned active, historical, and unknown-status bundles but disclose the precise coverage failure under evidence limitations. Do not turn partial coverage into a no-bundle claim.
+- When `bundle_status` is `available`, use `bundle_summary`, every `active_bundles` entry, and the already-limited `historical_bundles` list. Omit bundle content when there are no active or historical bundles to report.
+- When `bundle_status` is `partial`, use the returned active and historical bundles but disclose the precise coverage failure under evidence limitations. Summarize the count of unknown-status records as a coverage limitation without listing those records as bundle rows. Do not turn partial coverage into a no-bundle claim.
 - When `bundle_status` is `unavailable`, preserve `bundle_reason`, omit bundle claims, and disclose the failure under evidence limitations only when it affects deal timing.
 - Treat `qualifying_tier_prices` as listed bundle-tier totals. A null amount or currency means variable or unrecorded pricing. The `note` may describe selection counts, build-your-own rules, or other material terms; paraphrase it and never imply that every eligible game is included.
 - Link bundle titles only with the API-provided `details_url`. Link `offer_url` only for an active bundle; never reuse an expired offer URL.
@@ -318,11 +318,11 @@ Use emoji selectively as visual navigation and status reinforcement. Emoji must 
 
 **Bundle context:**
 
-[Omit this subsection completely when a complete bundle lookup returns zero bundles. Otherwise, show all active bundles and up to the three historical bundles already returned by the pricing script. State the known total when `historical_bundles_truncated` is true.]
+[Omit this subsection completely when there are no active or historical bundles to report. Otherwise, show all active bundles and up to the three historical bundles already returned by the pricing script. State the known historical total when `historical_bundles_truncated` is true. Report unknown-status records only as a coverage limitation, not as bundle rows.]
 
 | Bundle | Availability | Provider | Listed qualifying tier |
 |---|---|---|---|
-| [Bundle title](<details_url>) [· Offer](<offer_url>) | Active until ... / Ended ... / Unknown | ... | ... / Variable or not recorded / Not directly comparable |
+| [Bundle title](<details_url>) [· Offer](<offer_url>) | Active until ... / Ended ... | ... | ... / Variable or not recorded / Not directly comparable |
 
 [Include the `Offer` link only for active bundles. Explain material selection or build-your-own terms from `note`. State that listed tier totals are bundle prices rather than standalone game prices. Preserve currencies and do not perform FX conversion.]
 
@@ -390,13 +390,13 @@ Treat the report as a buyer's guide rather than an analysis transcript:
   * `concerning` when recurring current issues can materially affect purchase suitability;
   * `unknown` when coverage is insufficient.
 * Only for `early-access` games, classify `Developer activity` as `active`, `sparse`, `silent`, or `unknown`. This describes verified update or communication activity only and is not itself a product-health rating.
-* Preserve the exact price inputs and historical-low semantics from the pricing workflow. The buyer-facing table labels `Current Steam price`, `Steam regular price`, `Discount`, `Steam recorded low`, and `Compared with recorded low` map respectively to `current_price`, `regular_price`, `discount_percent`, `historical_low_price` with `steam_low_timestamp`, and the required current-versus-historical-low comparison. `Exact-low recurrence` maps to `exact_low_pattern`. `Recurring realistic sale level` maps to `recurring_sale_price`. `Sustained list-price change` maps to `list_price_change`.
+* Preserve the exact price inputs and historical-low semantics from the pricing workflow. The buyer-facing table labels `Now`, `Regular price`, `Discount`, `Steam recorded low`, and `Compared with recorded low` map respectively to `current_price`, `regular_price`, `discount_percent`, `historical_low_price` with `steam_low_timestamp`, and the required current-versus-historical-low comparison. `Exact-low recurrence` maps to `exact_low_pattern`. `Recurring realistic sale level` maps to `recurring_sale_price`. `Sustained list-price change` maps to `list_price_change`.
 * In the price table, `✅`, `🔽`, and `⬆️` only reinforce the explicit recorded-low comparison text. They do not represent overall deal quality or the purchase recommendation.
 * A stale isolated record alone must not support waiting; prefer the recurring current-regime sale level when available. Matching a recurring level supports buying on price; being above a lower recurring level supports waiting.
 * A sustained list-price change shifts which historical regime is relevant. Explain this in `Deal value` and `Buy timing` but do not independently alter game fit or product health. Pre-change lows remain factual but are not presented as realistic current-regime targets.
 * Missing or ambiguous history prevents recurrence and repricing claims without suppressing a valid current Steam price.
 * Place full bundle details and bundle history in the optional `Bundle context` subsection under `💰 Is the price right?`, then weigh their transaction consequence in `Deal value` and `Buy timing`. When at least one active bundle exists, surface a brief notice in `⚠️ Before you buy` as described in that section's template, directing the reader to `Bundle context` for details.
-* Show every active and unknown-status bundle and no more than the three historical bundles returned by the script. Use the known total to disclose omitted older entries. Omit the subsection when `bundle_status` is `available` and `bundle_summary.total_count` is zero.
+* Show every active bundle and no more than the three historical bundles returned by the script. Use the known historical total to disclose omitted older entries. Do not show unknown-status records as bundle rows; summarize their count under bundle coverage. Omit the subsection when there are no active or historical bundles to report.
 * Describe a tier amount as a listed qualifying bundle tier, never as a standalone game price or per-game value. Preserve material build-your-own, selection-count, addon, or variable-price conditions and link the ITAD details page near the row.
 * Never perform currency conversion. Compare an active bundle numerically with `current_price` only when there is exactly one unambiguous non-null qualifying amount and both currencies match. Otherwise state that the prices are not directly comparable.
 * A clearly priced active bundle at or below the standalone price may support choosing the bundle, but mention its tier or selection requirements. A more expensive active bundle matters only when its additional content is valuable to the buyer.
@@ -408,7 +408,7 @@ Treat the report as a buyer's guide rather than an analysis transcript:
 * Only for `early-access` games, report halted-development risk as `none found`, `low`, `medium`, `high`, or `confirmed`. Separate official evidence from owner reports and community speculation. Omit the field for every other release state.
 * Partial forum coverage must not be presented as evidence that no problem exists. Prefer `no recurring issue was found in the inspected material` when that is the strongest supported statement.
 * Show a coverage notice below the title when the report uses a recent sentiment-stratified sample or when a decision-relevant source is materially incomplete.
-* Keep material evidence limitations visible in the coverage notice and `🎯 Decision` section when they affect the recommendation. The collapsed `Evidence and limitations` section provides audit detail; it must not be used to hide decision-relevant uncertainty.
+* Keep material evidence limitations visible in the coverage notice and `🎯 Decision` section when they affect the recommendation. The `Evidence and limitations` section provides audit detail; it must not be used to hide decision-relevant uncertainty.
 * State exactly which conclusion a material evidence gap weakens or prevents rather than lowering all confidence indiscriminately.
 
 Before delivery, the coordinator must enforce the exact runtime `report_language` across worker output:
