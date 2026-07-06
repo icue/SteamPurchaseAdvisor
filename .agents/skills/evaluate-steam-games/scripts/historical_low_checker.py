@@ -36,6 +36,7 @@ from steam_purchase_advisor.steam_price_identity import (  # noqa: E402
 HISTORICAL_BUNDLE_LIMIT = 3
 RECENT_BUNDLE_DAYS = 365
 RECURRENT_BUNDLE_DAYS = 730
+SUBSCRIPTION_COUNTRY = "US"
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -659,6 +660,28 @@ def bundle_unavailable_fields(
     }
 
 
+def subscription_unavailable_fields(
+    reason: str,
+    message: str,
+    *,
+    retry_after: str | None = None,
+) -> dict[str, Any]:
+    error = {
+        "country": SUBSCRIPTION_COUNTRY,
+        "reason": reason,
+        "message": message,
+    }
+    return {
+        "subscription_status": "unavailable",
+        "subscription_country": SUBSCRIPTION_COUNTRY,
+        "subscriptions": [],
+        "subscription_reason": reason,
+        "subscription_message": message,
+        "subscription_retry_after": retry_after,
+        "subscription_errors": [error],
+    }
+
+
 def unavailable_result(
     reason: str,
     message: str,
@@ -678,6 +701,7 @@ def unavailable_result(
             retry_after=retry_after,
         ),
         **bundle_unavailable_fields(reason, message, retry_after=retry_after),
+        **subscription_unavailable_fields(reason, message, retry_after=retry_after),
     }
 
 
@@ -940,6 +964,239 @@ def parse_itad_datetime(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def get_subscriptions(api_key: str, itad_ids: list[str]) -> list[Any]:
+    data = post(
+        "/games/subs/v1",
+        api_key,
+        itad_ids,
+        params={"country": SUBSCRIPTION_COUNTRY},
+    )
+    if not isinstance(data, list):
+        raise RuntimeError("ITAD returned an invalid subscription response.")
+    return data
+
+
+def safe_subscription_itad_ids(
+    appid: str,
+    steam_details: SteamAppDetails | None,
+    product_to_itad_id: dict[str, str],
+) -> list[str]:
+    products = [f"app/{appid}"]
+    if steam_details is not None:
+        products.extend(steam_details.base_package_products)
+    return list(
+        dict.fromkeys(
+            itad_id
+            for product in products
+            if (itad_id := product_to_itad_id.get(product))
+        )
+    )
+
+
+def normalize_subscriptions(
+    rows: list[Any],
+    queried_ids: list[str],
+    now: datetime,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    queried = set(queried_ids)
+    subscriptions: dict[tuple[str, str], dict[str, Any]] = {}
+    errors: list[dict[str, str]] = []
+
+    def add_error(reason: str, message: str) -> None:
+        errors.append({"reason": reason, "message": message})
+
+    for row_index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            add_error(
+                "invalid_subscription_row",
+                f"Subscription row {row_index} is not an object.",
+            )
+            continue
+        row_id = row.get("id")
+        if not isinstance(row_id, str) or row_id not in queried:
+            add_error(
+                "unexpected_subscription_identity",
+                f"Subscription row {row_index} has an unexpected game identity.",
+            )
+            continue
+        raw_subscriptions = row.get("subs")
+        if not isinstance(raw_subscriptions, list):
+            add_error(
+                "invalid_subscription_list",
+                f"Subscription row {row_index} has no valid subscription list.",
+            )
+            continue
+
+        for sub_index, raw_subscription in enumerate(raw_subscriptions):
+            if not isinstance(raw_subscription, dict):
+                add_error(
+                    "invalid_subscription_record",
+                    f"Subscription record {row_index}:{sub_index} is not an object.",
+                )
+                continue
+            name_value = raw_subscription.get("name")
+            if not isinstance(name_value, str) or not name_value.strip():
+                add_error(
+                    "invalid_subscription_name",
+                    f"Subscription record {row_index}:{sub_index} has no valid name.",
+                )
+                continue
+            name = " ".join(name_value.split())
+
+            raw_id = raw_subscription.get("id")
+            subscription_id: int | str | None
+            if isinstance(raw_id, bool):
+                subscription_id = None
+            elif isinstance(raw_id, int) and raw_id >= 0:
+                subscription_id = raw_id
+            elif isinstance(raw_id, str) and raw_id.strip():
+                subscription_id = raw_id.strip()
+            else:
+                subscription_id = None
+
+            leaving_value = raw_subscription.get("leaving")
+            leaving: str | None = None
+            if leaving_value is not None:
+                leaving_date = parse_itad_datetime(leaving_value)
+                if leaving_date is None:
+                    add_error(
+                        "invalid_subscription_leaving_date",
+                        f"Subscription record {row_index}:{sub_index} has an invalid leaving date.",
+                    )
+                    continue
+                if leaving_date <= now:
+                    add_error(
+                        "expired_subscription_record",
+                        f"Subscription record {row_index}:{sub_index} has already passed its leaving date.",
+                    )
+                    continue
+                leaving = leaving_date.isoformat()
+
+            normalized_name = name.casefold()
+            key = (
+                ("id", str(subscription_id).casefold())
+                if subscription_id is not None
+                else ("name", normalized_name)
+            )
+            incoming = {"id": subscription_id, "name": name, "leaving": leaving}
+            existing = subscriptions.get(key)
+            if existing is None:
+                subscriptions[key] = incoming
+                continue
+
+            if existing["name"].casefold() != normalized_name:
+                add_error(
+                    "conflicting_subscription_name",
+                    f"Duplicate subscription {key[1]} has conflicting names.",
+                )
+            known_leaving = {
+                value
+                for value in (existing.get("leaving"), leaving)
+                if isinstance(value, str)
+            }
+            if len(known_leaving) > 1:
+                add_error(
+                    "conflicting_subscription_leaving_date",
+                    f"Duplicate subscription {name} has conflicting leaving dates.",
+                )
+            if known_leaving:
+                existing["leaving"] = min(known_leaving)
+
+    normalized = sorted(
+        subscriptions.values(),
+        key=lambda subscription: (
+            subscription["name"].casefold(),
+            str(subscription["id"]),
+        ),
+    )
+    return normalized, errors
+
+
+def load_us_subscription_result(
+    api_key: str,
+    itad_ids: list[str],
+    now: datetime,
+) -> dict[str, Any]:
+    try:
+        rows = get_subscriptions(api_key, itad_ids)
+        subscriptions, errors = normalize_subscriptions(rows, itad_ids, now)
+    except ItadRateLimitError as exc:
+        return {
+            "status": "unavailable",
+            "subscriptions": [],
+            "reason": "itad_rate_limited",
+            "message": str(exc),
+            "retry_after": exc.retry_after,
+            "errors": [{"reason": "itad_rate_limited", "message": str(exc)}],
+        }
+    except (RuntimeError, OSError, ValueError) as exc:
+        return {
+            "status": "unavailable",
+            "subscriptions": [],
+            "reason": "itad_subscription_request_failed",
+            "message": str(exc),
+            "retry_after": None,
+            "errors": [
+                {"reason": "itad_subscription_request_failed", "message": str(exc)}
+            ],
+        }
+
+    status = "partial" if errors else "available"
+    if status == "partial":
+        reason = "partial_subscription_coverage"
+        message = (
+            f"Some ITAD subscription records for {SUBSCRIPTION_COUNTRY} were invalid; "
+            "valid records were retained."
+        )
+    else:
+        reason = None
+        message = None
+    return {
+        "status": status,
+        "subscriptions": subscriptions,
+        "reason": reason,
+        "message": message,
+        "retry_after": None,
+        "errors": errors,
+    }
+
+
+def build_subscription_result(
+    api_key: str,
+    appid: str,
+    steam_details: SteamAppDetails | None,
+    product_to_itad_id: dict[str, str],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    itad_ids = safe_subscription_itad_ids(
+        appid, steam_details, product_to_itad_id
+    )
+    if not itad_ids:
+        return subscription_unavailable_fields(
+            "subscription_identity_unresolved",
+            "Could not resolve a safe Steam app or base-package identity for subscription lookup.",
+        )
+
+    evidence_time = now or datetime.now(timezone.utc)
+    result = load_us_subscription_result(api_key, itad_ids, evidence_time)
+
+    errors = [
+        {"country": SUBSCRIPTION_COUNTRY, **error}
+        for error in result.pop("errors")
+    ]
+
+    return {
+        "subscription_status": result["status"],
+        "subscription_country": SUBSCRIPTION_COUNTRY,
+        "subscriptions": result["subscriptions"],
+        "subscription_reason": result["reason"],
+        "subscription_message": result["message"],
+        "subscription_retry_after": result["retry_after"],
+        "subscription_errors": errors,
+    }
 
 
 def bundle_key(bundle: dict[str, Any]) -> tuple[str, str]:
@@ -1241,7 +1498,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Check a Steam game's current regional price and historical low, "
-            "and retrieve its ITAD bundle context."
+            "and retrieve its ITAD bundle and subscription context."
         )
     )
     parser.add_argument("--appid", required=True, type=parse_appid, help="Steam appid, e.g. 220")
@@ -1306,7 +1563,7 @@ def main() -> int:
             json.dumps(
                 unavailable_result(
                     "missing_itad_api_key",
-                    "ITAD price and bundle data are unavailable because "
+                    "ITAD price, bundle, and subscription data are unavailable because "
                     "itad_api_key is not configured.",
                     country,
                     report_country,
@@ -1339,7 +1596,7 @@ def main() -> int:
             json.dumps(
                 unavailable_result(
                     "missing_pricing_country",
-                    "pricing_country is required for ITAD price and bundle data.",
+                    "pricing_country is required for regional ITAD price and bundle data.",
                     None,
                     report_country,
                     report_country_error=report_country_error,
@@ -1416,9 +1673,15 @@ def main() -> int:
         package_status=package_status,
         package_error=package_error,
     )
+    subscription_result = build_subscription_result(
+        api_key,
+        args.appid,
+        steam_details,
+        product_to_itad_id,
+    )
     print(
         json.dumps(
-            {**price_result, **bundle_result},
+            {**price_result, **bundle_result, **subscription_result},
             ensure_ascii=False,
             indent=2,
         )

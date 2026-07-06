@@ -1,11 +1,11 @@
 ---
 name: evaluate-steam-games
-description: Evaluate one or more specified Steam games before purchase using regional current and historical-low pricing, current and past bundle context, full or user-approved stratified analysis of Steam reviews without a language filter, recent forum discussions, current product-health signals, developer-stated Early Access timelines, and a report localized to the configured report country. Use when the user supplies app IDs or game names and asks whether to buy, analyze, compare, or screen those games, or when filter-steam-wishlist hands off resolved app IDs. Requires a connected Steam Review and Forum MCP server; ITAD deal data is optional.
+description: Evaluate one or more specified Steam games before purchase using regional current and historical-low pricing, current and past bundle context, US subscription-access context, full or user-approved stratified analysis of Steam reviews without a language filter, recent forum discussions, current product-health signals, developer-stated Early Access timelines, and a report localized to the configured report country. Use when the user supplies app IDs or game names and asks whether to buy, analyze, compare, or screen those games, or when filter-steam-wishlist hands off resolved app IDs. Requires a connected Steam Review and Forum MCP server; ITAD data is optional.
 ---
 
 # Evaluate Steam Games
 
-Produce one localized purchase report per specified game. SteamID and wishlist visibility do not affect this skill. Require the Steam Review and Forum MCP for every report; treat ITAD pricing and bundles as optional.
+Produce one localized purchase report per specified game. SteamID and wishlist visibility do not affect this skill. Require the Steam Review and Forum MCP for every report; treat ITAD pricing, bundles, and subscription data as optional.
 
 ## Protect repository state during execution
 
@@ -61,7 +61,7 @@ Treat explicit current Steam metadata as authoritative. Never infer Early Access
 
 ## Select countries, language, and titles
 
-- Use `pricing_country` for Steam AppDetails `cc` and ITAD regional prices. Ask only when ITAD is configured and it is missing or invalid. Never configure a currency or perform conversion.
+- Use `pricing_country` for Steam AppDetails `cc` and ITAD regional prices and bundles. ITAD subscription access always uses the US catalog. Ask only when ITAD is configured and `pricing_country` is missing or invalid. Never configure a currency or perform conversion.
 - Use `report_country` to choose the report language. Ask when missing or invalid and ask for a specific language for multilingual countries.
 - Resolve one exact runtime `report_language` and matching Steam language code before preflight or workers.
 
@@ -90,15 +90,15 @@ After modes are fixed, use one parallel worker per game when supported; otherwis
 
 ## Single-game workflow
 
-### 1. Check optional price and bundle evidence
+### 1. Check optional price, bundle, and subscription evidence
 
-Read [the pricing and bundle contract](references/pricing-contract.md) completely, then run after MCP readiness:
+Read [the pricing, bundle, and subscription contract](references/pricing-contract.md) completely, then run after MCP readiness:
 
 ```text
 python -B <skill-dir>/scripts/historical_low_checker.py --appid <appid> [--country <CC>] [--report-country <CC>]
 ```
 
-Apply every field, failure, identity, regional, comparison, bundle, and shared-quota rule from that contract. Treat ITAD failures as non-fatal. When the key is absent, explain that local `itad_api_key` configuration enables pricing and bundles, mark that evidence unavailable, and continue.
+Apply every field, failure, identity, regional, comparison, bundle, subscription, and shared-quota rule from that contract. Treat ITAD failures as non-fatal. When the key is absent, explain that local `itad_api_key` configuration enables pricing, bundles, and subscription data, mark that evidence unavailable, and continue.
 
 ### 2. Analyze reviews
 

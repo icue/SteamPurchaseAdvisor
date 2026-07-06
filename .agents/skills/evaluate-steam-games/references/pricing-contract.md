@@ -1,4 +1,4 @@
-# Pricing and bundle contract
+# Pricing, bundle, and subscription contract
 
 Read this file completely before running `historical_low_checker.py` or interpreting its output.
 
@@ -8,11 +8,12 @@ Read this file completely before running `historical_low_checker.py` or interpre
 - Independent evidence statuses
 - Report field mappings and timing judgments
 - Bundle interpretation
+- Subscription interpretation
 - Shared request budget
 
 ## Regional identity and scope
 
-Use `pricing_country` for Steam AppDetails `cc` and ITAD regional prices. Do not pass a currency. Preserve every amount and ISO currency exactly and never perform FX conversion.
+Use `pricing_country` for Steam AppDetails `cc` and ITAD regional prices and bundles. Do not pass a currency. Preserve every amount and ISO currency exactly and never perform FX conversion.
 
 Standalone price, sale, and historical-low analysis is Steam Store-only (`price_scope: "steam"`). Bundles are the explicit multi-store exception.
 
@@ -26,7 +27,7 @@ Query store low and history for the exactly matched identity, or the sole distin
 - When `price_status` is `unavailable`, preserve `reason`, mark current price, regular price, and discount unavailable, and continue. If exactly one identity was resolved, current-overview failure does not suppress a valid Steam low or history result.
 - Use `historical_low_price` only when `steam_low_status` is `available`; use `steam_low_timestamp` as its date. Compare it with current price only when `steam_low_comparison_status` is `available`.
 - Preserve `steam_low_reason`, `steam_low_message`, and `steam_low_retry_after` when the low is unavailable. Preserve `steam_low_comparison_reason` and `steam_low_comparison_message` when comparison fails. Use `current_price_unavailable` when a low exists without current price.
-- After product lookup and unambiguous identity resolution, current price, Steam low, low comparison, Steam history, and bundles fail independently. A shared ITAD rate limit or unresolved identity may suppress dependent signals.
+- After product lookup, current price, Steam low, low comparison, Steam history, bundles, and subscriptions fail independently. A shared ITAD rate limit or unresolved identity may suppress dependent signals.
 - For `itad_rate_limited`, honor `retry_after` when practical and retry once. Treat other ITAD failures as non-fatal. Never invent missing price evidence.
 
 ## Report field mappings and timing judgments
@@ -72,6 +73,23 @@ Use the script summary fields for history. Recent means at least one expiry with
 
 When any active bundle exists, place a brief notice first in `⚠️ Before you buy` and direct the reader to Bundle context. Keep full terms and history in the optional Bundle context subsection under `💰 Is the price right?`.
 
+## Subscription interpretation
+
+Query `/games/subs/v1` with `country=US`, independent of `pricing_country`; the endpoint has no currency parameter. Subscription access is context, not price evidence. Never compare it numerically with Steam prices or bundle tiers, and never use it to change Recommendation, Deal value, Buy timing, Product state, or Confidence.
+
+Use only ITAD IDs mapped from the direct `app/<appid>` product and Steam AppDetails `base_package_products`. Query every distinct safe ID together, merge the records, and exclude every other package alias. This supports package-backed base games without allowing deluxe editions, multipacks, bundles, or DLC collections to supply subscription context.
+
+Interpret the primary fields as follows:
+
+- `subscription_status: available` means the US response was valid. `subscriptions` may be empty; an empty list is not a buyer-facing finding and must produce no subscription content in the report. It never establishes that the game is absent from every subscription service.
+- `subscription_status: partial` means valid records were retained but one or more records were malformed, expired, or conflicting. Preserve `subscription_reason`, `subscription_message`, and `subscription_errors`.
+- `subscription_status: unavailable` means no safe identity was resolved or the request failed. Preserve `subscription_reason`, `subscription_message`, and `subscription_retry_after`.
+- `subscription_country` is always `US`; `subscription_errors` identifies `US` for every error.
+
+Deduplicate subscriptions by subscription ID, or by normalized service name when no ID is supplied. Preserve `leaving: null` as unknown. For duplicate records with different valid leaving dates, retain the earliest and mark coverage partial. Omit malformed or already-passed leaving records and mark coverage partial. Do not infer permanence from a null leaving date.
+
+Subscription failures never suppress valid price, history, or bundle evidence. A successful empty result has no `subscription_reason` or `subscription_message` because its meaning is carried by the empty list and must not be narrated in the report.
+
 ## Shared request budget
 
-Treat ITAD's 1,000 requests per rolling five minutes as one API-key budget across workers, wishlist handoffs, and concurrent runs. For each game estimate `4 + A` normal requests, where `A` is the number of distinct ITAD identities resolved from Steam app and package products: one product lookup, one Steam-filtered overview, one Steam store low, one Steam price history, and one bundle-history request per identity. Allow up to `A` additional active-bundle requests only for missing or malformed expiry values. Regional Steam AppDetails identity validation does not consume ITAD quota. Include known prior consumption, reserve a safety margin, and never assign each worker a separate allowance.
+Treat ITAD's 1,000 requests per rolling five minutes as one API-key budget across workers, wishlist handoffs, and concurrent runs. For each game estimate `5 + A` normal requests, where `A` is the number of distinct ITAD identities resolved from Steam app and package products: one product lookup, one Steam-filtered overview, one Steam store low, one Steam price history, one US subscription request, and one bundle-history request per identity. Allow up to `A` additional active-bundle requests only for missing or malformed expiry values. Regional Steam AppDetails identity validation does not consume ITAD quota. Include known prior consumption, reserve a safety margin, and never assign each worker a separate allowance.

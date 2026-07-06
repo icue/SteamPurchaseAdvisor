@@ -9,11 +9,9 @@ Steam Purchase Advisor is a Skills bundle for filtering public Steam wishlists a
 | Skill | Purpose |
 | --- | --- |
 | [filter-steam-wishlist](.agents/skills/filter-steam-wishlist/SKILL.md) | Lists a public wishlist, optionally filters it by Steam Store sale, Steam Store historical-low, Early Access, or full-release status. |
-| [evaluate-steam-games](.agents/skills/evaluate-steam-games/SKILL.md) | Produces reports from Steam reviews, recent forum activity, current product health, Steam Store pricing with sale-recurrence analysis, and Early Access development signals.[^early-access-signals] |
+| [evaluate-steam-games](.agents/skills/evaluate-steam-games/SKILL.md) | Produces reports from Steam reviews, recent forum activity, current product health, Steam Store pricing with sale-recurrence analysis, subscriptions, and Early Access development signals.[^early-access-signals] |
 
 [^early-access-signals]: For Early Access games, these signals include recent Steam forum discussions; dated official announcements, updates, and roadmaps; developer activity and communication; the current build's technical and content condition; the Steam-listed Early Access start and the developer's stated or defensibly derived full-release target date; and evidence of stalled or ended development.
-
-Standalone price, sale, and historical-low analysis covers only the Steam Store. Bundle context remains multi-store and is the sole non-Steam price exception.
 
 ## Example prompts
 
@@ -28,7 +26,7 @@ Standalone price, sale, and historical-low analysis covers only the Steam Store.
 - An Agent Skills-compatible client and Python 3.
 - A public Steam wishlist. For wishlist filtering, provide a SteamID64, numeric or custom Steam profile URL, or exact custom profile ID.
 - [Node.js 22.19+](https://nodejs.org/) with npm/npx for the evaluator's [Steam Review and Forum MCP](https://github.com/icue/SteamReviewAndForumMcp).
-- An [IsThereAnyDeal API key](https://isthereanydeal.com/apps/) only if Steam Store price, discount, historical-low, sale-recurrence, or bundle data is needed.
+- An [IsThereAnyDeal API key](https://isthereanydeal.com/apps/) only if Steam Store price, discount, historical-low, sale-recurrence, bundle, or subscription data is needed.
 
 ## Quick start
 
@@ -68,8 +66,8 @@ Every value in **config.json** is a JSON string and must keep its double quotes.
 | Field | Format and capability |
 | --- | --- |
 | **steam_id** | A 17-digit SteamID64 string. Enables public-wishlist operations. |
-| **itad_api_key** | An ITAD API-key string. Enables current prices, discounts, and historical-low checks. Create an app at [IsThereAnyDeal](https://isthereanydeal.com/apps/) to obtain one. |
-| **pricing_country** | Uppercase two-letter ISO 3166-1 country code, such as **"US"** or **"CN"**. Selects regional price data. |
+| **itad_api_key** | An ITAD API-key string. Enables current prices, discounts, historical-low checks, bundle context, and US subscription-access context. Create an app at [IsThereAnyDeal](https://isthereanydeal.com/apps/) to obtain one. |
+| **pricing_country** | Uppercase two-letter ISO 3166-1 country code, such as **"US"** or **"CN"**. Selects regional price and bundle data. |
 | **report_country** | Uppercase two-letter ISO 3166-1 country code. Selects language for report and Steam title localization. |
 
 Request-time profile URLs and custom IDs are resolved automatically. Only canonical 17-digit SteamID64 values are stored in **config.json**.
