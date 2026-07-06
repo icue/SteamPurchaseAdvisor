@@ -233,11 +233,15 @@ Use emoji selectively as visual navigation and status reinforcement. Emoji must 
 
 ## ⚠️ Before you buy
 
+[When at least one active bundle contains this game, insert the following as the first item, before regret risks. Include it regardless of the bundle's currency, price-competitiveness, or comparability with the standalone price:]
+
+- **🎁 Active bundle available:** [Name the bundle with its ITAD details link. State the provider, listed qualifying-tier price with currency (or "variable / not recorded"), and expiry. When multiple active bundles exist, name each one briefly. Direct the reader to `Bundle context` for full terms.]
+
 - **[Most important regret risk]:** [Explain the practical consequence and who should care.]
 - **[Second decision-relevant fact]:** [Explain what this means for the buyer.]
 - **[Third decision-relevant fact]:** [Explain what this means for the buyer.]
 
-[Use no more than three items. Omit weak or redundant findings.]
+[The active-bundle item does not count toward the three-item limit for regret risks and decision-relevant facts. The three-item cap applies only to the remaining findings. Omit the bundle item when no active bundle is available. Omit weak or redundant findings.]
 
 ## 🎮 Is this game for you?
 
@@ -312,7 +316,7 @@ Use emoji selectively as visual navigation and status reinforcement. Emoji must 
 | **Recurring realistic sale level** | ... / None found / Unavailable |
 | **Sustained list-price change** | ↑ Increased from ... to ... on date (+...%) / ↓ Decreased from ... to ... on date (−...%) / None detected / Ambiguous / Insufficient |
 
-### Bundle context
+**Bundle context:**
 
 [Omit this subsection completely when a complete bundle lookup returns zero bundles. Otherwise, show all active bundles and up to the three historical bundles already returned by the pricing script. State the known total when `historical_bundles_truncated` is true.]
 
@@ -363,7 +367,7 @@ Treat the report as a buyer's guide rather than an analysis transcript:
 * Do not add traffic-light emoji to `Game fit`, `Product state`, `Deal value`, `Current issues`, `Developer activity`, `Halted-development risk`, or review evidence-strength labels. Their textual taxonomies are authoritative.
 * Do not decorate ordinary review bullets, evidence rows, source links, or methodology fields with emoji.
 * Do not manufacture a fixed number of strengths, weaknesses, fit conditions, or risks. Omit weak, unsupported, or non-material findings.
-* Keep `⚠️ Before you buy` to the findings most likely to cause buyer's remorse or materially change the purchase decision. Do not repeat findings there solely because they appear later in the report.
+* Keep `⚠️ Before you buy` to the findings most likely to cause buyer's remorse or materially change the purchase decision. Do not repeat findings there solely because they appear later in the report. The conditional active-bundle notice is an intentional cross-reference that directs the reader to `Bundle context`; it is not subject to this repetition rule.
 * For review findings, preserve all four evidence groups internally: strengths in positive reviews, weaknesses in positive reviews, weaknesses in negative reviews, and strengths in negative reviews. Translate them into `What players love`, `What players criticize`, `Even fans admit`, and `Even critics concede`.
 * Attach `strong`, `moderate`, or `limited evidence` only to review themes when the retrieved material supports that qualitative evidence judgment. These labels describe evidence, not game quality.
 * Translate each material review theme into a buyer consequence. Prefer `recurring stutter makes the current build a poor fit for frame-sensitive players` over `performance issues`.
@@ -391,7 +395,7 @@ Treat the report as a buyer's guide rather than an analysis transcript:
 * A stale isolated record alone must not support waiting; prefer the recurring current-regime sale level when available. Matching a recurring level supports buying on price; being above a lower recurring level supports waiting.
 * A sustained list-price change shifts which historical regime is relevant. Explain this in `Deal value` and `Buy timing` but do not independently alter game fit or product health. Pre-change lows remain factual but are not presented as realistic current-regime targets.
 * Missing or ambiguous history prevents recurrence and repricing claims without suppressing a valid current Steam price.
-* Place bundle evidence only in the optional `Bundle context` subsection under `💰 Is the price right?`, then weigh its transaction consequence in `Deal value` and `Buy timing`. Do not place bundle history under game fit or product health.
+* Place full bundle details and bundle history in the optional `Bundle context` subsection under `💰 Is the price right?`, then weigh their transaction consequence in `Deal value` and `Buy timing`. When at least one active bundle exists, surface a brief notice in `⚠️ Before you buy` as described in that section's template, directing the reader to `Bundle context` for details.
 * Show every active and unknown-status bundle and no more than the three historical bundles returned by the script. Use the known total to disclose omitted older entries. Omit the subsection when `bundle_status` is `available` and `bundle_summary.total_count` is zero.
 * Describe a tier amount as a listed qualifying bundle tier, never as a standalone game price or per-game value. Preserve material build-your-own, selection-count, addon, or variable-price conditions and link the ITAD details page near the row.
 * Never perform currency conversion. Compare an active bundle numerically with `current_price` only when there is exactly one unambiguous non-null qualifying amount and both currencies match. Otherwise state that the prices are not directly comparable.
