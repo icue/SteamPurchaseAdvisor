@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -37,6 +38,18 @@ HISTORICAL_BUNDLE_LIMIT = 3
 RECENT_BUNDLE_DAYS = 365
 RECURRENT_BUNDLE_DAYS = 730
 SUBSCRIPTION_COUNTRY = "US"
+EPIC_SHOP_ID = 16
+EPIC_GIVEAWAY_COUNTRY = "US"
+EPIC_GIVEAWAY_SINCE = "2017-01-01T00:00:00+00:00"
+RELATED_TITLE_SUFFIXES = (
+    "Ultimate Edition",
+    "Complete Edition",
+    "Definitive Edition",
+    "Deluxe Edition",
+    "Gold Edition",
+    "Game of the Year Edition",
+    "GOTY Edition",
+)
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -134,6 +147,285 @@ def get_steam_history(
     if not isinstance(data, list):
         raise RuntimeError("ITAD returned an invalid history response.")
     return data
+
+
+def get_epic_history(api_key: str, itad_id: str) -> list[dict[str, Any]]:
+    data = get(
+        "/games/history/v2",
+        api_key,
+        params={
+            "id": itad_id,
+            "country": EPIC_GIVEAWAY_COUNTRY,
+            "shops": str(EPIC_SHOP_ID),
+            "since": EPIC_GIVEAWAY_SINCE,
+        },
+    )
+    if not isinstance(data, list):
+        raise RuntimeError("ITAD returned an invalid Epic history response.")
+    return data
+
+
+def search_itad_games(api_key: str, title: str) -> list[dict[str, Any]]:
+    data = get(
+        "/games/search/v1",
+        api_key,
+        params={"title": title, "results": "20"},
+    )
+    if not isinstance(data, list):
+        raise RuntimeError("ITAD returned an invalid game-search response.")
+    return [row for row in data if isinstance(row, dict)]
+
+
+def get_itad_info(api_key: str, itad_id: str) -> dict[str, Any]:
+    data = get("/games/info/v2", api_key, params={"id": itad_id})
+    if not isinstance(data, dict):
+        raise RuntimeError("ITAD returned an invalid game-info response.")
+    return data
+
+
+def collapse_whitespace(value: str) -> str:
+    return " ".join(value.split())
+
+
+def derive_related_base_title(title: Any) -> str | None:
+    if not isinstance(title, str):
+        return None
+    normalized = collapse_whitespace(title)
+    if not normalized:
+        return None
+
+    for suffix in RELATED_TITLE_SUFFIXES:
+        pattern = rf"^(.+?)(?:\s*[:\-]\s*|\s+){re.escape(suffix)}$"
+        match = re.match(pattern, normalized, flags=re.IGNORECASE)
+        if not match:
+            continue
+        base_title = collapse_whitespace(match.group(1))
+        if len(base_title) >= 3:
+            return base_title
+        return None
+    return None
+
+
+def normalized_title_key(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = collapse_whitespace(value)
+    return normalized.casefold() if normalized else None
+
+
+def extract_entity_names(container: dict[str, Any] | None) -> set[str]:
+    if not isinstance(container, dict):
+        return set()
+
+    names: set[str] = set()
+    for field in ("developers", "publishers"):
+        values = container.get(field)
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            name: Any
+            if isinstance(value, dict):
+                name = value.get("name")
+            else:
+                name = value
+            key = normalized_title_key(name)
+            if key is not None:
+                names.add(key)
+    return names
+
+
+def decimal_value_equals(value: Any, target: Decimal) -> bool:
+    if value is None:
+        return False
+    try:
+        parsed = Decimal(str(value))
+    except (ValueError, ArithmeticError):
+        return False
+    return parsed.is_finite() and parsed == target
+
+
+def extract_epic_giveaway_events(
+    history: list[dict[str, Any]], itad_id: str, title: str, scope: str
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    seen_timestamps: set[str] = set()
+
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        timestamp = entry.get("timestamp")
+        if not isinstance(timestamp, str) or not timestamp.strip():
+            continue
+
+        deal = entry.get("deal")
+        if not isinstance(deal, dict):
+            continue
+
+        price = deal.get("price")
+        amount_is_zero = (
+            isinstance(price, dict)
+            and decimal_value_equals(price.get("amount"), Decimal("0"))
+        )
+        cut_is_full = decimal_value_equals(deal.get("cut"), Decimal("100"))
+
+        if not amount_is_zero and not cut_is_full:
+            continue
+        if timestamp in seen_timestamps:
+            continue
+        seen_timestamps.add(timestamp)
+        events.append({
+            "timestamp": timestamp,
+            "itad_id": itad_id,
+            "title": title,
+            "scope": scope,
+        })
+
+    return events
+
+
+def epic_giveaway_unavailable_fields(
+    reason: str,
+    message: str,
+    *,
+    retry_after: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "epic_giveaway_status": "unavailable",
+        "epic_giveaway_detected": None,
+        "epic_giveaway_scope": None,
+        "epic_giveaway_events": [],
+        "epic_giveaway_reason": reason,
+        "epic_giveaway_message": message,
+        "epic_giveaway_retry_after": retry_after,
+    }
+
+
+def epic_giveaway_available_fields(
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    scope = events[0]["scope"] if events else None
+    return {
+        "epic_giveaway_status": "available",
+        "epic_giveaway_detected": bool(events),
+        "epic_giveaway_scope": scope,
+        "epic_giveaway_events": events,
+        "epic_giveaway_reason": None,
+        "epic_giveaway_message": None,
+        "epic_giveaway_retry_after": None,
+    }
+
+
+def epic_giveaway_partial_fields(reason: str, message: str) -> dict[str, Any]:
+    return {
+        "epic_giveaway_status": "partial",
+        "epic_giveaway_detected": False,
+        "epic_giveaway_scope": None,
+        "epic_giveaway_events": [],
+        "epic_giveaway_reason": reason,
+        "epic_giveaway_message": message,
+        "epic_giveaway_retry_after": None,
+    }
+
+
+def find_related_title_candidate(
+    api_key: str, exact_itad_id: str, steam_details: SteamAppDetails
+) -> dict[str, Any] | None:
+    steam_title = steam_details.data.get("name")
+    base_title = derive_related_base_title(steam_title)
+    if base_title is None:
+        return None
+
+    base_key = normalized_title_key(base_title)
+    if base_key is None:
+        return None
+
+    candidates = [
+        row
+        for row in search_itad_games(api_key, base_title)
+        if row.get("id") != exact_itad_id
+        and row.get("type") == "game"
+        and normalized_title_key(row.get("title")) == base_key
+    ]
+    if len(candidates) != 1:
+        return None
+
+    candidate = candidates[0]
+    candidate_id = candidate.get("id")
+    candidate_title = collapse_whitespace(str(candidate.get("title", "")))
+    if not isinstance(candidate_id, str) or not candidate_id:
+        return None
+    if not candidate_title:
+        return None
+
+    candidate_info = get_itad_info(api_key, candidate_id)
+    steam_names = extract_entity_names(steam_details.data)
+    candidate_names = extract_entity_names(candidate_info)
+    if not steam_names or not candidate_names or not steam_names.intersection(candidate_names):
+        return None
+
+    return {"id": candidate_id, "title": candidate_title}
+
+
+def build_epic_giveaway_result(
+    api_key: str, exact_itad_id: str, steam_details: SteamAppDetails
+) -> dict[str, Any]:
+    try:
+        exact_history = get_epic_history(api_key, exact_itad_id)
+    except ItadRateLimitError as exc:
+        return epic_giveaway_unavailable_fields(
+            "itad_rate_limited", str(exc), retry_after=exc.retry_after
+        )
+    except (RuntimeError, OSError, ValueError) as exc:
+        return epic_giveaway_unavailable_fields("itad_request_failed", str(exc))
+
+    steam_title_value = steam_details.data.get("name")
+    steam_title = (
+        collapse_whitespace(steam_title_value)
+        if isinstance(steam_title_value, str)
+        else ""
+    )
+    exact_title = steam_title or f"Steam app {steam_details.appid}"
+    exact_events = extract_epic_giveaway_events(
+        exact_history, exact_itad_id, exact_title, "exact"
+    )
+    if exact_events:
+        return epic_giveaway_available_fields(exact_events)
+
+    if derive_related_base_title(steam_details.data.get("name")) is None:
+        return epic_giveaway_available_fields([])
+
+    try:
+        related_candidate = find_related_title_candidate(
+            api_key, exact_itad_id, steam_details
+        )
+    except ItadRateLimitError as exc:
+        return {
+            **epic_giveaway_partial_fields("itad_rate_limited", str(exc)),
+            "epic_giveaway_retry_after": exc.retry_after,
+        }
+    except (RuntimeError, OSError, ValueError) as exc:
+        return epic_giveaway_partial_fields("itad_request_failed", str(exc))
+
+    if related_candidate is None:
+        return epic_giveaway_available_fields([])
+
+    try:
+        related_history = get_epic_history(api_key, related_candidate["id"])
+    except ItadRateLimitError as exc:
+        return {
+            **epic_giveaway_partial_fields("itad_rate_limited", str(exc)),
+            "epic_giveaway_retry_after": exc.retry_after,
+        }
+    except (RuntimeError, OSError, ValueError) as exc:
+        return epic_giveaway_partial_fields("itad_request_failed", str(exc))
+
+    related_events = extract_epic_giveaway_events(
+        related_history,
+        related_candidate["id"],
+        related_candidate["title"],
+        "related_title",
+    )
+    return epic_giveaway_available_fields(related_events)
 
 
 def extract_sale_episodes(
@@ -620,6 +912,7 @@ def price_unavailable_fields(
         "exact_low_within_730": None,
         "recurring_sale_price": None,
         "list_price_change": None,
+        **epic_giveaway_unavailable_fields(reason, message, retry_after=retry_after),
     }
     result["report_country_error"] = report_country_error
     if retry_after:
@@ -743,6 +1036,7 @@ def build_price_result(
     current_price = None
     regular_price = None
     target_itad_id = itad_aliases[0] if len(itad_aliases) == 1 else None
+    epic_itad_id: str | None = product_to_itad_id.get(f"app/{steam_details.appid}")
 
     # --- Phase 1: deterministically select a Steam-matching ITAD identity ---
     try:
@@ -756,6 +1050,8 @@ def build_price_result(
             steam_details, product_to_itad_id, offers_by_itad_id
         )
         target_itad_id = selection.itad_id
+        if epic_itad_id is None:
+            epic_itad_id = selection.itad_id
         overview = overviews[target_itad_id]
         current_offer = selection.offer
         current_price = extract_price(current_offer)
@@ -950,6 +1246,16 @@ def build_price_result(
             "recurring_sale_price": regime_price,
             "list_price_change": list_change,
         })
+
+    # --- Phase 4: Epic Games Store giveaway history ---
+    if epic_itad_id is None:
+        result.update(epic_giveaway_unavailable_fields(
+            "steam_price_identity_unresolved",
+            "Could not resolve a direct Steam app or Steam-matched ITAD identity "
+            "for Epic giveaway lookup.",
+        ))
+    else:
+        result.update(build_epic_giveaway_result(api_key, epic_itad_id, steam_details))
 
     return result
 
@@ -1563,8 +1869,8 @@ def main() -> int:
             json.dumps(
                 unavailable_result(
                     "missing_itad_api_key",
-                    "ITAD price, bundle, and subscription data are unavailable because "
-                    "itad_api_key is not configured.",
+                    "ITAD price, bundle, subscription, and Epic giveaway data are "
+                    "unavailable because itad_api_key is not configured.",
                     country,
                     report_country,
                     report_country_error=report_country_error,

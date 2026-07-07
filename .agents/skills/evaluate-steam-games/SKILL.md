@@ -98,7 +98,7 @@ Read [the pricing, bundle, and subscription contract](references/pricing-contrac
 python -B <skill-dir>/scripts/historical_low_checker.py --appid <appid> [--country <CC>] [--report-country <CC>]
 ```
 
-Apply every field, failure, identity, regional, comparison, bundle, subscription, and shared-quota rule from that contract. Treat ITAD failures as non-fatal. When the key is absent, explain that local `itad_api_key` configuration enables pricing, bundles, and subscription data, mark that evidence unavailable, and continue.
+Apply every field, failure, identity, regional, comparison, bundle, subscription, Epic giveaway, and shared-quota rule from that contract. Treat ITAD failures as non-fatal. When the key is absent, explain that local `itad_api_key` configuration enables pricing, bundles, subscription data, and Epic giveaway context, mark that evidence unavailable, and continue.
 
 ### 2. Analyze reviews
 

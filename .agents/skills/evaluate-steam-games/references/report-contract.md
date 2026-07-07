@@ -43,6 +43,7 @@ Read this file completely immediately before composing each report. Treat the En
 
 - **🎁 Active bundle available:** [First item whenever any active bundle exists: names, ITAD details links, providers, qualifying-tier prices or variable/unrecorded status, expiries, and direction to Bundle context.]
 - **🎟️ Subscription access:** [Include only when `subscriptions` is a non-empty list. After the active-bundle notice when present, otherwise first: all services, known leaving dates, and an explicit US-catalog qualifier when the pricing country is not US.]
+- **Epic giveaway history:** [Include only when `epic_giveaway_detected` is true. After active-bundle and subscription notices when present, otherwise before material regret risks: exact giveaway date, or related base-title giveaway date with SKU caveat.]
 - **[Material regret risk]:** [Practical consequence and affected buyer.]
 - [Up to two more material decision facts.]
 
@@ -114,6 +115,7 @@ Read this file completely immediately before composing each report. Treat the En
 | **Exact-low recurrence** | Recurring / Recent isolated / Aging / Stale isolated / Stale previously repeated / Insufficient / Unavailable |
 | **Recurring realistic sale level** | ... / None found / Unavailable |
 | **Sustained list-price change** | ↑ Increased ... / ↓ Decreased ... / None detected / Ambiguous / Insufficient / Unavailable |
+| **Epic giveaway context** | [Only when detected: exact giveaway date, or related base-title giveaway date with SKU caveat] |
 
 **🎟️ Subscription access:** [Include only when `subscriptions` is a non-empty list. Use a compact sentence for one service and a compact Service/Region/Leaving table for multiple services. When the pricing country is not US, state that this is US-catalog context and does not establish local availability.]
 
@@ -139,6 +141,7 @@ Read this file completely immediately before composing each report. Treat the En
 | **Forum coverage** | [Sections and material inspected; partial failures.] |
 | **Price coverage** | Steam Store-only via IsThereAnyDeal for [country] / Unavailable — [reason] |
 | **Steam history** | Available — [episode count] / Unavailable — [reason] |
+| **Epic giveaway coverage** | [Include only when a detected giveaway was reported.] |
 | **Bundle coverage** | [Include only when reported, partial, or unavailable and material.] |
 | **Subscription coverage** | [Include only when `subscriptions` is a non-empty list; disclose partial coverage alongside the retained records.] |
 
@@ -157,12 +160,14 @@ Read this file completely immediately before composing each report. Treat the En
 - Keep game fit, product state, deal value, and evidence confidence distinct. Do not create numeric scores, hidden aggregation, or a second final verdict after `🎯 Decision`.
 - Use tables for compact comparable facts and prose or bullets for nuance. Do not manufacture a fixed number of findings; omit weak, unsupported, redundant, or non-material content.
 - Use emoji only for major navigation, recommendation reinforcement, fit orientation, and recorded-low comparison. Pair every emoji with explicit text. Never add traffic-light or decorative emoji to signal taxonomies, review evidence, ordinary findings, methodology, links, or limitations.
-- Limit `⚠️ Before you buy` to three material regret risks or decision facts. Required active-bundle and subscription notices are additional items and do not count toward that limit. Keep the active-bundle notice first and the subscription notice second when both exist; otherwise put the subscription notice first.
+- Limit `⚠️ Before you buy` to three material regret risks or decision facts. Required active-bundle, subscription, and Epic giveaway notices are additional items and do not count toward that limit. Keep required notices in this order when present: active bundle, subscription, Epic giveaway, then material regret risks.
 - Keep decision-relevant gaps visible in the coverage notice and Decision section. Use Evidence and limitations for audit detail, not to hide uncertainty. Lower confidence only when a missing source prevents a decision-relevant conclusion.
 - Apply all price, recurrence, repricing, bundle, comparison, and timing meanings exactly as defined in `pricing-contract.md` when pricing runs.
 - Treat subscription records as present only when `subscriptions` is a non-empty list. For an empty list, omit every subscription mention, including absence claims, regional caveats, the inline block, and the Subscription coverage row. Do not turn `subscription_status`, an empty lookup, or a failed lookup into buyer-facing evidence.
 - With a non-empty list, show the subscription notice, inline block, and Subscription coverage row. Name every service and known leaving date; for null say no date was reported. Use “ITAD lists.” When the pricing country differs from `subscription_country`, identify the evidence as US-catalog context and state that availability in the pricing country is not established.
 - State that access requires the applicable subscription and may depend on plan, platform, and account region; it did not affect the recommendation or Steam price judgment. Subscription gaps alone do not trigger the top coverage notice, lower Confidence, or alter a decision signal.
+- Include Epic giveaway context in both `⚠️ Before you buy` and the price table only when `epic_giveaway_detected` is true. For `epic_giveaway_scope: exact`, write: “ITAD records an Epic Games Store free giveaway on [date].” For `epic_giveaway_scope: related_title`, write: “ITAD records a related base-title Epic Games Store free giveaway for [title] on [date]; this is not exact Steam SKU evidence.”
+- Omit every Epic giveaway mention when `epic_giveaway_detected` is false or null, or when `epic_giveaway_status` is partial or unavailable, unless a partial or unavailable lookup materially limits already reported context. Never state or imply that the game was not given away, never predict future giveaways, and never use Epic giveaway history to alter Recommendation, Deal value, Product state, Confidence, or Buy timing.
 
 ## Review and fit rules
 
