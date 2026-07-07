@@ -9,7 +9,7 @@ Select games from a public Steam wishlist, localize titles, and hand IDs to `eva
 
 ## Protect repository state during execution
 
-- Treat the repository as read-only except when creating or updating `config.json` after explicit user confirmation.
+- Treat the repository as read-only during Steam workflow execution except when creating or updating `config.json` after explicit user confirmation. A separate bundle update may modify tracked repository files only after the user explicitly approves an available update and the update-safety policy authorizes the operation.
 - Never modify an existing Python file or create helper scripts in the repository. Report bundled-script failures instead.
 - Keep temporary state outside the repository. If repository-local state is unavoidable, use one uniquely named, tracked path; remove it on success, failure, or cancellation after verifying the cleanup target and report any residue.
 - Run bundled scripts with Python 3 and `-B`. Do not install dependencies into the repository.
@@ -31,6 +31,16 @@ At the start of every wishlist request, run:
 ```text
 python -B <repo-root>/.agents/lib/steam_purchase_advisor/config_status.py
 ```
+
+## Follow the bundle update policy
+
+The repository root is three directories above this skill directory.
+
+At the start of the first Steam Purchase Advisor workflow in the current conversation or agent run, read and follow:
+
+`<repo-root>/.agents/references/bundle-update-policy.md`
+
+Treat this policy as required workflow instructions. Do not load or apply it again when the current context shows that a sibling Steam Purchase Advisor skill already followed the bundle update policy.
 
 The helper exposes only configuration presence, field errors, countries, and whether the ITAD key exists. Use it even in unfiltered mode. When all required fields are valid, stay silent about configuration and do not run the update helper. Never open `config.json` or expose `itad_api_key`. Request-supplied profile or country values override config only for that request; never persist them automatically.
 
