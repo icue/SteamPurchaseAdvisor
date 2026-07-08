@@ -1,6 +1,6 @@
 ---
 name: evaluate-steam-games
-description: Evaluate one or more specified Steam games before purchase using regional current and historical-low pricing, current and past bundle context, US subscription-access context, full or user-approved stratified analysis of Steam reviews without a language filter, recent forum discussions, current product-health signals, developer-stated Early Access timelines, and a report localized to the configured report country. Use when the user supplies app IDs or game names and asks whether to buy, analyze, compare, or screen those games, or when filter-steam-wishlist hands off resolved app IDs. Requires a connected Steam Review and Forum MCP server; ITAD data is optional.
+description: Evaluate one or more specified Steam games before purchase using regional current and historical-low pricing, current and past bundle context, US subscription-access context, full or user-approved proportional or balanced recent sampling of Steam reviews without a language filter, recent forum discussions, current product-health signals, developer-stated Early Access timelines, and a report localized to the configured report country. Use when the user supplies app IDs or game names and asks whether to buy, analyze, compare, or screen those games, or when filter-steam-wishlist hands off resolved app IDs. Requires a connected Steam Review and Forum MCP server; ITAD data is optional.
 ---
 
 # Evaluate Steam Games
@@ -88,15 +88,23 @@ Prefer Steam's selected-language title; otherwise preserve the publisher's origi
 Run coordinator-level preflight after country and title resolution, before ITAD, corpora, or analysis workers.
 
 1. For each app ID call `get_steam_review` with `filter: "recent"`, `language: "all"`, `review_type: "all"`, `purchase_type: "all"`, `num_per_page: 1`, `filter_offtopic_activity: 0`, `fetch_all: false`, and `include_review_metadata: false`.
-2. Record `query_summary.total_reviews`, or unknown when absent or the call fails.
-3. Select `full` automatically for a known count at or below 2,000. For every game above 2,000 or unknown, require the user to choose full retrieval, stratified sampling, or a per-game mapping.
-4. Present one localized confirmation for all affected games. Do not create corpora or start analysis until the choice is made; stop if none is made.
+2. Record `query_summary.total_reviews`, `query_summary.total_positive`, and `query_summary.total_negative`; record each as unknown when absent, malformed, or the call fails. Treat the sentiment breakdown as known only when both polarity counts are known non-negative integers and their sum is positive.
+3. Select `full` automatically for a known `total_reviews` at or below 2,000.
+4. For every game above 2,000 or with unknown `total_reviews`, require the user to choose one review mode:
+   - `full`: retrieve all matching reviews.
+   - `proportional-recent`: require a user-specified total sample size `X` and a known sentiment breakdown. Allocate `X` across positive and negative corpora in proportion to `total_positive : total_negative`, then retrieve the newest reviews within each polarity.
+   - `balanced-recent`: require a user-specified total sample size `X`. Split `X` as evenly as integer quotas allow between positive and negative corpora, then retrieve the newest reviews within each polarity.
+   - For multiple games, allow a per-game mapping of mode and sample size.
+5. Present one localized confirmation for all affected games. Show the known total and polarity counts, explain the three modes briefly, and request `X` for every sampled game. Do not create corpora or start analysis until every affected game has a mode and every sampled game has a valid `X`; stop if the required choice is not made. Do not invent a sample size.
+6. Require `X` to be an integer of at least 2. When `total_reviews` is known, require `X < total_reviews`; if the user requests `X >= total_reviews`, explain that full retrieval covers the known population and require either `full` or a smaller `X`.
+7. For `proportional-recent`, let `S = total_positive + total_negative`. Compute raw quotas `X * total_positive / S` and `X * total_negative / S`, floor both, then assign any remaining slots by largest fractional remainder until the integer quotas sum exactly to `X`. Break equal fractional remainders in favor of the positive quota. A zero quota means no corpus for that polarity.
+8. For `balanced-recent`, set `positive_quota = ceil(X / 2)` and `negative_quota = floor(X / 2)`.
 
-Apply the threshold per game, never to a combined total. Parallel preflight workers may return only app ID, resolved title, count or unknown, and a concise failure reason.
+Apply the threshold per game, never to a combined total. Parallel preflight workers may return only app ID, resolved title, total count or unknown, positive count or unknown, negative count or unknown, and a concise failure reason.
 
 ## Coordinate multiple games
 
-After modes are fixed, use one parallel worker per game when supported; otherwise run sequentially. Pass app ID, countries, exact languages, title, release state, reused metadata, mode, population count, skill path, and shared ITAD budget. Keep each game's review and forum work in one worker and one report. Keep MCP setup, release classification, preflight, and confirmation in the coordinator.
+After modes are fixed, use one parallel worker per game when supported; otherwise run sequentially. Pass app ID, countries, exact languages, title, release state, reused metadata, mode, total/positive/negative population counts, sample size and per-polarity quotas when sampled, skill path, and shared ITAD budget. Keep each game's review and forum work in one worker and one report. Keep MCP setup, release classification, preflight, quota calculation, and confirmation in the coordinator.
 
 ## Single-game workflow
 
@@ -122,21 +130,30 @@ Use the coordinator-selected mode and `language: "all"`.
 4. Page through `query_steam_review_corpus` with bounded `limit` and increasing `offset` until every stored review is processed.
 5. Call the analysis exhaustive only when the uncapped corpus completes and exported count is consistent with the available population.
 
-#### Stratified sample mode
+#### Proportional recent sample mode
 
-1. Create separate positive and negative corpora with `language: "all"`, matching `review_type`, `purchase_type: "all"`, `max_reviews: 1000`, `traversal_mode: "recent"`, `include_review_metadata: true`, and `include_offtopic_activity: true`.
-2. Poll both to completion or failure. Use every review when either side has fewer than 1,000; never transfer unused quota.
+1. Use the coordinator-calculated positive and negative quotas. For each nonzero quota, create a separate corpus with `language: "all"`, the matching `review_type`, `purchase_type: "all"`, `max_reviews` equal to that polarity's quota, `traversal_mode: "recent"`, `include_review_metadata: true`, and `include_offtopic_activity: true`. Do not create a corpus for a zero quota.
+2. Poll every created corpus to completion or failure.
+3. Aggregate each created corpus separately and page through every stored review.
+4. Treat this as a recent sentiment-stratified sample with proportional allocation, never as a random sample. The quota ratio is derived from the preflight population counts; do not infer population rating or theme prevalence from the retrieved positive-to-negative ratio. Report population sentiment counts or shares only from the recorded preflight totals.
+5. State that proportional allocation can provide limited discovery coverage for the minority polarity when its quota is small.
+
+#### Balanced recent sample mode
+
+1. Use the coordinator-calculated positive and negative quotas. For each nonzero quota, create a separate corpus with `language: "all"`, the matching `review_type`, `purchase_type: "all"`, `max_reviews` equal to that polarity's quota, `traversal_mode: "recent"`, `include_review_metadata: true`, and `include_offtopic_activity: true`. Do not create a corpus for a zero quota.
+2. Poll every created corpus to completion or failure. Use every available review when either polarity has fewer reviews than its quota; never transfer unused quota to the other polarity.
 3. Aggregate separately and page through every stored review.
-4. Treat this as a recent sentiment-stratified sample, never random or proportional; do not infer population rating from its positive-to-negative ratio.
+4. Treat this as a recent sentiment-stratified sample with balanced allocation, never as a random or proportional sample. The positive-to-negative corpus counts are deliberately reweighted for issue and strength discovery; never interpret cross-polarity raw counts as population voice, rating, or prevalence.
 
-For either mode:
+For every mode:
 
 - Query at least `review`, `voted_up`, `language`, `timestamp_created`, and `author.playtime_at_review`.
 - Maintain four evidence groups: strengths and weaknesses in positive reviews, and weaknesses and strengths in negative reviews.
 - Weight recurring, recent, cross-language, and higher-playtime observations over anecdotes; translate or paraphrase into the report language.
 - Attach `strong`, `moderate`, or `limited` evidence only when supported by those factors. These labels measure evidence, not quality.
-- Report population or unknown, mode, retrieved counts, observed languages, failures, and material limitations. `language: "all"` does not guarantee every language appears in a sample.
-- Claim exact theme counts only when counted in retrieved material.
+- Report total/positive/negative population counts or unknown, exact mode, requested sample size and quotas when sampled, retrieved counts, observed languages, failures, and material limitations. `language: "all"` does not guarantee every language appears in a sample.
+- Claim exact theme counts only when counted in retrieved material. In sampled modes, do not extrapolate retrieved theme counts to the full population.
+- When a sampled polarity has a zero quota, state explicitly that no reviews from that polarity were inspected and do not infer themes for that polarity.
 
 ### 3. Build the Early Access timeline and inspect current health
 

@@ -19,7 +19,7 @@ Read this file completely immediately before composing each report. Treat the En
 
 [SteamDB](https://steamdb.info/app/<appid>/) [· [ITAD](<itad_url>) only when supplied by the pricing script]
 
-> [Coverage notice only for a recent sentiment-stratified sample or another decision-relevant limitation.]
+> [Coverage notice for either sampled review mode or another decision-relevant limitation.]
 
 ## 🎯 Decision
 
@@ -134,7 +134,7 @@ Read this file completely immediately before composing each report. Treat the En
 | Evidence | Coverage |
 |---|---|
 | **Review population** | ... total / Unknown |
-| **Retrieval mode** | Full / Recent sentiment-stratified sample |
+| **Retrieval mode** | Full / Proportional recent sentiment sample / Balanced recent sentiment sample |
 | **Reviews retrieved** | ... total or positive/negative corpus counts |
 | **Languages observed** | ... |
 | **Review limitations** | [Sampling, corpus, population comparison, or other material limitation.] |
@@ -177,7 +177,9 @@ Read this file completely immediately before composing each report. Treat the En
 - Choose the format independently for What players love and What players criticize. Use a table only with at least two material themes when every theme fits one concise player-experience sentence without losing qualifications or subgroup context; otherwise use bullets for the entire subsection. Never mix both formats within one subsection.
 - In Where players disagree, explain a split only from retrieved evidence, never genre assumptions.
 - Treat the two fit-table columns as independent lists, not forced opposites. Leave cells blank when material finding counts differ.
-- In sampled mode, identify the recent sentiment-stratified design prominently. Calibrate confidence to consistency and coverage, never its positive-to-negative ratio.
+- In either sampled mode, identify the exact recent sentiment-stratified design prominently and state the requested sample size, polarity quotas, and retrieved polarity counts. Calibrate confidence to consistency and coverage, never the sample positive-to-negative ratio.
+- For a proportional recent sentiment sample, state that polarity quotas follow the preflight population sentiment ratio but retrieval remains recent and non-random. Report population sentiment counts or shares only from preflight totals; never extrapolate theme prevalence from sample counts. Make limited minority-polarity coverage visible when its quota is small.
+- For a balanced recent sentiment sample, state that polarity quotas are deliberately balanced for strength and issue discovery. Never compare cross-polarity raw counts as population voice, rating, or prevalence.
 
 ## Product-health rules
 
