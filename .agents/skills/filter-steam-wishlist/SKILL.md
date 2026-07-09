@@ -159,7 +159,7 @@ python -B <repo-root>/.agents/lib/steam_purchase_advisor/resolve_steam_titles.py
 Price filtering (`on-sale` and `historical-low`) requires `itad_api_key` and `pricing_country`.
 
 - If the key is configured but the country is missing or invalid, ask for an uppercase two-letter country code and pass `--country <CC>`.
-- If a filtered run returns `price_data_unavailable` because of a missing or invalid key, ITAD authentication or network failure, Steam AppDetails failure, or rate limit, explain that current price, discount, and historical-low data are unavailable. Honor `Retry-After` once when practical.
+- If a price-filtered run returns `price_data_unavailable` because of a missing or invalid ITAD key, ITAD authentication or network failure, malformed regional price metadata, or rate limit, explain that current price, discount, and historical-low data are unavailable. Honor `Retry-After` once when practical.
 - Rerun with `--price-state any` after an unresolved ITAD failure, preserving the exact selected `--release-state` and `--demo-state` selections. State prominently that the price filter was not applied and never describe the fallback as price-filtered.
 - Present fallback list requests through the title resolver.
 
