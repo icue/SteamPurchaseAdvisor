@@ -44,8 +44,21 @@ from steam_purchase_advisor.steam_price_identity import (  # noqa: E402
 
 WISHLIST_URL = "https://api.steampowered.com/IWishlistService/GetWishlist/v1/"
 EARLY_ACCESS_GENRE_ID = "70"
-RELEASE_STATE_CHOICES = ("any", "early-access", "full-release")
+PRICE_STATE_CHOICES = ("any", "on-sale", "historical-low")
+RELEASE_STATE_CHOICES = ("any", "unreleased", "early-access", "full-release")
+DEMO_STATE_CHOICES = ("any", "available", "unavailable")
 STORE_MAX_WORKERS = 4
+
+
+class StoreMetadataUnavailableError(RuntimeError):
+    """Raised when Steam AppDetails cannot be fetched or parsed."""
+
+    def __init__(self, failures: dict[int, str]) -> None:
+        self.failures = failures
+        super().__init__(
+            "Steam Store metadata was unavailable for "
+            f"{len(failures)} candidate game(s)."
+        )
 
 
 class WishlistUnavailableError(RuntimeError):
@@ -138,18 +151,25 @@ def get_wishlist_appids(steam_id: str) -> list[int]:
     return appids
 
 
-def classify_release_state(data: object) -> str:
+def classify_release_state(details: SteamAppDetails) -> str:
     """Classify one successful Steam Store appdetails data object."""
+    data = details.data
     if not isinstance(data, dict):
         return "unknown"
 
-    genres = data.get("genres")
     release_date = data.get("release_date")
-    if not isinstance(genres, list) or not isinstance(release_date, dict):
+    if not isinstance(release_date, dict):
         return "unknown"
 
     coming_soon = release_date.get("coming_soon")
     if not isinstance(coming_soon, bool):
+        return "unknown"
+
+    if coming_soon:
+        return "unreleased"
+
+    genres = data.get("genres")
+    if not isinstance(genres, list):
         return "unknown"
 
     genre_ids: set[str] = set()
@@ -161,50 +181,9 @@ def classify_release_state(data: object) -> str:
             return "unknown"
         genre_ids.add(str(genre_id))
 
-    if coming_soon:
-        return "unreleased"
     if EARLY_ACCESS_GENRE_ID in genre_ids:
         return "early-access"
     return "full-release"
-
-
-def fetch_release_state(appid: int) -> tuple[str, str | None]:
-    """Fetch one app's release state with bounded retries."""
-    try:
-        steam_details = fetch_steam_appdetails(appid)
-    except SteamAppDetailsError as exc:
-        return "unknown", exc.reason
-    release_state = classify_release_state(steam_details.data)
-    if release_state == "unknown":
-        return "unknown", "steam_invalid_response"
-    return release_state, None
-
-
-def fetch_release_states(
-    appids: list[int],
-) -> tuple[dict[int, str], dict[int, str]]:
-    """Fetch release states concurrently while retaining per-app failures."""
-    if not appids:
-        return {}, {}
-
-    states: dict[int, str] = {}
-    failures: dict[int, str] = {}
-    workers = min(STORE_MAX_WORKERS, len(appids))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(fetch_release_state, appid): appid for appid in appids
-        }
-        for future in as_completed(futures):
-            appid = futures[future]
-            try:
-                state, failure_reason = future.result()
-            except Exception:
-                state, failure_reason = "unknown", "unexpected_store_error"
-            states[appid] = state
-            if state == "unknown":
-                failures[appid] = failure_reason or "steam_invalid_response"
-
-    return states, failures
 
 
 def select_appids_by_release_state(
@@ -217,21 +196,32 @@ def select_appids_by_release_state(
 
 
 def get_release_state_filtered_appids(
-    appids: list[int], release_state: str
+    appids: list[int], release_state: str, details_by_appid: dict[int, SteamAppDetails]
 ) -> list[int]:
     if release_state == "any" or not appids:
         return list(appids)
 
-    states, failures = fetch_release_states(appids)
+    states: dict[int, str] = {}
+    failures: dict[int, str] = {}
+    
+    for appid in appids:
+        details = details_by_appid[appid]
+            
+        state = classify_release_state(details)
+        states[appid] = state
+        if state == "unknown":
+            failures[appid] = "steam_invalid_response"
+
     if failures:
         raise ReleaseStateUnavailableError(failures)
+        
     return select_appids_by_release_state(appids, release_state, states)
 
 
-def fetch_price_metadata(
-    appids: list[int], country: str
+def fetch_store_metadata(
+    appids: list[int], country: str | None = None
 ) -> dict[int, SteamAppDetails]:
-    """Fetch every regional AppDetails record or fail the complete filter."""
+    """Fetch every requested AppDetails record or fail the complete filter."""
     if not appids:
         return {}
 
@@ -246,38 +236,46 @@ def fetch_price_metadata(
         for future in as_completed(futures):
             appid = futures[future]
             try:
-                steam_details = future.result()
-                price_overview = steam_details.data.get("price_overview")
-                malformed_price = price_overview is not None and (
-                    not isinstance(price_overview, dict)
-                    or not steam_details.has_price
-                    or steam_details.final_amount_int > steam_details.initial_amount_int
-                )
-                if malformed_price:
-                    failures[appid] = "steam_price_metadata_malformed"
-                else:
-                    details[appid] = steam_details
+                details[appid] = future.result()
             except SteamAppDetailsError as exc:
                 failures[appid] = exc.reason
             except Exception:
                 failures[appid] = "unexpected_store_error"
 
     if failures:
-        raise PriceMetadataUnavailableError(failures)
+        raise StoreMetadataUnavailableError(failures)
     return details
+
+
+def validate_price_metadata(
+    appids: list[int], details_by_appid: dict[int, SteamAppDetails]
+) -> None:
+    failures: dict[int, str] = {}
+    for appid in appids:
+        details = details_by_appid[appid]
+        price_overview = details.data.get("price_overview")
+        malformed_price = price_overview is not None and (
+            not isinstance(price_overview, dict)
+            or not details.has_price
+            or details.final_amount_int > details.initial_amount_int
+        )
+        if malformed_price:
+            failures[appid] = "steam_price_metadata_malformed"
+    if failures:
+        raise PriceMetadataUnavailableError(failures)
 
 
 def get_filtered_sale_appids(
     appids: list[int],
+    details_by_appid: dict[int, SteamAppDetails],
     api_key: str,
     historical_low_only: bool,
     country: str,
 ) -> list[int]:
-    details_by_appid = fetch_price_metadata(appids, country)
     sale_candidates = {
-        appid: details
-        for appid, details in details_by_appid.items()
-        if details.is_discounted
+        appid: details_by_appid[appid]
+        for appid in appids
+        if details_by_appid[appid].is_discounted
     }
     if not sale_candidates:
         return []
@@ -359,46 +357,69 @@ def get_filtered_sale_appids(
     return [appid for appid in appids if appid in matches]
 
 
-def get_on_sale_appids(
-    appids: list[int], api_key: str, country: str
+def get_price_state_filtered_appids(
+    appids: list[int],
+    price_state: str,
+    details_by_appid: dict[int, SteamAppDetails],
+    api_key: str | None,
+    country: str | None,
 ) -> list[int]:
+    if price_state == "any":
+        return list(appids)
+
+    if api_key is None or country is None:
+        raise RuntimeError("api_key and country are required for price filtering")
+
+    validate_price_metadata(appids, details_by_appid)
+
     return get_filtered_sale_appids(
-        appids, api_key, historical_low_only=False, country=country
+        appids,
+        details_by_appid,
+        api_key,
+        historical_low_only=(price_state == "historical-low"),
+        country=country,
     )
 
 
-def get_historical_low_sale_appids(
-    appids: list[int], api_key: str, country: str
+def get_demo_state_filtered_appids(
+    appids: list[int],
+    demo_state: str,
+    details_by_appid: dict[int, SteamAppDetails],
 ) -> list[int]:
-    return get_filtered_sale_appids(
-        appids, api_key, historical_low_only=True, country=country
-    )
+    """Select a demo-availability subset without changing wishlist order."""
+    if demo_state == "any":
+        return list(appids)
+
+    required_has_demo = demo_state == "available"
+
+    return [
+        appid
+        for appid in appids
+        if details_by_appid[appid].has_demo is required_has_demo
+    ]
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Return app IDs from a public Steam wishlist."
     )
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument(
-        "--on-sale-only",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Only return games currently discounted (default: enabled).",
-    )
-    mode.add_argument(
-        "--historical-low-only",
-        action="store_true",
-        help="Only return discounted games at or below their ITAD historical low.",
+    parser.add_argument(
+        "--price-state",
+        choices=PRICE_STATE_CHOICES,
+        default="on-sale",
+        help="Filter by price state (default: on-sale).",
     )
     parser.add_argument(
         "--release-state",
         choices=RELEASE_STATE_CHOICES,
         default="any",
-        help=(
-            "Filter by Steam release state after price filtering "
-            "(default: any)."
-        ),
+        help="Filter by Steam release state (default: any).",
+    )
+    parser.add_argument(
+        "--demo-state",
+        choices=DEMO_STATE_CHOICES,
+        default="any",
+        help="Filter by Steam Demo availability (default: any).",
     )
     parser.add_argument(
         "--steam-profile",
@@ -459,10 +480,14 @@ def main() -> int:
         )
         return 2
 
-    should_filter = args.historical_low_only or args.on_sale_only
+    price_filter_active = args.price_state != "any"
+    release_filter_active = args.release_state != "any"
+    demo_filter_active = args.demo_state != "any"
+    metadata_filter_active = price_filter_active or release_filter_active or demo_filter_active
+
     country: str | None = None
     api_key: str | None = None
-    if should_filter:
+    if price_filter_active:
         try:
             api_key = config.itad_api_key
         except ConfigValueError as exc:
@@ -499,12 +524,27 @@ def main() -> int:
         )
         return 2
 
-    if should_filter:
+    details_by_appid: dict[int, SteamAppDetails] = {}
+    if metadata_filter_active:
         try:
-            if args.historical_low_only:
-                appids = get_historical_low_sale_appids(appids, api_key, country)
-            else:
-                appids = get_on_sale_appids(appids, api_key, country)
+            details_by_appid = fetch_store_metadata(
+                appids,
+                country if price_filter_active else None,
+            )
+        except StoreMetadataUnavailableError as exc:
+            emit_error(
+                "store_metadata_unavailable",
+                "store_metadata_unavailable",
+                str(exc),
+                unknown_appids=sorted(exc.failures),
+            )
+            return 5
+
+    if price_filter_active:
+        try:
+            appids = get_price_state_filtered_appids(
+                appids, args.price_state, details_by_appid, api_key, country
+            )
         except PriceMetadataUnavailableError as exc:
             reasons = sorted(set(exc.failures.values()))
             emit_error(
@@ -530,17 +570,25 @@ def main() -> int:
             )
             return 3
 
-    try:
-        appids = get_release_state_filtered_appids(appids, args.release_state)
-    except ReleaseStateUnavailableError as exc:
-        reasons = sorted(set(exc.failures.values()))
-        emit_error(
-            "release_state_data_unavailable",
-            reasons[0] if len(reasons) == 1 else "steam_release_state_lookup_failed",
-            str(exc),
-            unknown_appids=sorted(exc.failures),
+    if release_filter_active:
+        try:
+            appids = get_release_state_filtered_appids(
+                appids, args.release_state, details_by_appid
+            )
+        except ReleaseStateUnavailableError as exc:
+            reasons = sorted(set(exc.failures.values()))
+            emit_error(
+                "release_state_data_unavailable",
+                reasons[0] if len(reasons) == 1 else "steam_release_state_lookup_failed",
+                str(exc),
+                unknown_appids=sorted(exc.failures),
+            )
+            return 4
+
+    if demo_filter_active:
+        appids = get_demo_state_filtered_appids(
+            appids, args.demo_state, details_by_appid
         )
-        return 4
 
     print(json.dumps(appids, indent=2))
     return 0

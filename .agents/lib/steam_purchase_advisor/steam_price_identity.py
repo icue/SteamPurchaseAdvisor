@@ -35,7 +35,7 @@ class PriceIdentityError(RuntimeError):
 
 @dataclass(frozen=True)
 class SteamAppDetails:
-    """Steam metadata needed for release-state and price-identity decisions."""
+    """Normalized Steam AppDetails metadata used by purchase-advisor decisions."""
 
     appid: str
     data: dict[str, Any]
@@ -45,6 +45,7 @@ class SteamAppDetails:
     discount_percent: int | float | None
     all_products: tuple[str, ...]
     base_package_products: tuple[str, ...]
+    has_demo: bool
 
     @property
     def has_price(self) -> bool:
@@ -101,6 +102,10 @@ def _is_true(value: Any) -> bool:
 def parse_steam_appdetails(appid: str | int, data: dict[str, Any]) -> SteamAppDetails:
     """Normalize one successful Steam AppDetails data object."""
     appid_text = str(appid)
+
+    raw_demos = data.get("demos")
+    has_demo = isinstance(raw_demos, list) and bool(raw_demos)
+
     price_overview = data.get("price_overview")
     if isinstance(price_overview, dict):
         currency_value = price_overview.get("currency")
@@ -171,6 +176,7 @@ def parse_steam_appdetails(appid: str | int, data: dict[str, Any]) -> SteamAppDe
         discount_percent=discount_percent,
         all_products=tuple(dict.fromkeys(all_products)),
         base_package_products=tuple(dict.fromkeys(base_products)),
+        has_demo=has_demo,
     )
 
 

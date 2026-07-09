@@ -36,7 +36,7 @@ if hasattr(sys.stderr, "reconfigure"):
 APPDETAILS_URL = "https://store.steampowered.com/api/appdetails"
 DEFAULT_MAX_WORKERS = 4
 MAX_ALLOWED_WORKERS = 8
-RETRY_DELAYS = (1.0, 2.0)
+RETRY_DELAYS = (5.0, 10.0)
 
 STEAM_LANGUAGES = {
     "arabic",
@@ -350,4 +350,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
