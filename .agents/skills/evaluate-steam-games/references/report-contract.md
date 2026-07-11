@@ -43,7 +43,7 @@ Read this file completely immediately before composing each report. Treat the En
 
 - **🎁 Active bundle available:** [First item whenever any active bundle exists: names, ITAD details links, providers, qualifying-tier prices or variable/unrecorded status, expiries, and direction to Bundle context.]
 - **🎟️ Subscription access:** [Include only when `subscriptions` is a non-empty list. After the active-bundle notice when present, otherwise first: all services, known leaving dates, and an explicit US-catalog qualifier when the pricing country is not US.]
-- **Epic giveaway history:** [Include only when `epic_giveaway_detected` is true. After active-bundle and subscription notices when present, otherwise before material regret risks: exact giveaway date, or related base-title giveaway date with SKU caveat.]
+- **Epic giveaway history:** [Include only when `epic_giveaway_detected` is true. After active-bundle and subscription notices when present, otherwise before material regret risks: every returned unique exact giveaway date, or every returned unique related base-title giveaway date with SKU caveat.]
 - **[Material regret risk]:** [Practical consequence and affected buyer.]
 - [Up to two more material decision facts.]
 
@@ -110,12 +110,12 @@ Read this file completely immediately before composing each report. Treat the En
 | **Now** | ... / Unavailable |
 | **Regular price** | ... / Unavailable |
 | **Discount** | ... / Unavailable |
-| **Steam recorded low** | ... and date / Unavailable |
+| **Steam recorded low** | ... and date / ... with date Unavailable / Unavailable |
 | **Compared with recorded low** | ✅ Matches recorded low / 🔽 Establishes a new low / ⬆️ Above recorded low / Unavailable |
 | **Exact-low recurrence** | Recurring / Recent isolated / Aging / Stale isolated / Stale previously repeated / Insufficient / Unavailable |
 | **Recurring realistic sale level** | ... / None found / Unavailable |
 | **Sustained list-price change** | ↑ Increased ... / ↓ Decreased ... / None detected / Ambiguous / Insufficient / Unavailable |
-| **Epic giveaway context** | [Only when detected: exact giveaway date, or related base-title giveaway date with SKU caveat] |
+| **Epic giveaway context** | [Only when detected: every returned unique exact giveaway date, or every returned unique related base-title giveaway date with SKU caveat] |
 
 **🎟️ Subscription access:** [Include only when `subscriptions` is a non-empty list. Use a compact sentence for one service and a compact Service/Region/Leaving table for multiple services. When the pricing country is not US, state that this is US-catalog context and does not establish local availability.]
 
@@ -140,7 +140,7 @@ Read this file completely immediately before composing each report. Treat the En
 | **Review limitations** | [Sampling, corpus, population comparison, or other material limitation.] |
 | **Forum coverage** | [Sections and material inspected; partial failures.] |
 | **Price coverage** | Steam Store-only via IsThereAnyDeal for [country] / Unavailable — [reason] |
-| **Steam history** | Available — [episode count] / Unavailable — [reason] |
+| **Steam history** | Available — [`sale_episode_count`] / Unavailable — [reason] |
 | **Epic giveaway coverage** | [Include only when a detected giveaway was reported.] |
 | **Bundle coverage** | [Include only when reported, partial, or unavailable and material.] |
 | **Subscription coverage** | [Include only when `subscriptions` is a non-empty list; disclose partial coverage alongside the retained records.] |
@@ -166,8 +166,8 @@ Read this file completely immediately before composing each report. Treat the En
 - Treat subscription records as present only when `subscriptions` is a non-empty list. For an empty list, omit every subscription mention, including absence claims, regional caveats, the inline block, and the Subscription coverage row. Do not turn `subscription_status`, an empty lookup, or a failed lookup into buyer-facing evidence.
 - With a non-empty list, show the subscription notice, inline block, and Subscription coverage row. Name every service and known leaving date; for null say no date was reported. Use “ITAD lists.” When the pricing country differs from `subscription_country`, identify the evidence as US-catalog context and state that availability in the pricing country is not established.
 - State that access requires the applicable subscription and may depend on plan, platform, and account region; it did not affect the recommendation or Steam price judgment. Subscription gaps alone do not trigger the top coverage notice, lower Confidence, or alter a decision signal.
-- Include Epic giveaway context in both `⚠️ Before you buy` and the price table only when `epic_giveaway_detected` is true. For `epic_giveaway_scope: exact`, write: “ITAD records an Epic Games Store free giveaway on [date].” For `epic_giveaway_scope: related_title`, write: “ITAD records a related base-title Epic Games Store free giveaway for [title] on [date]; this is not exact Steam SKU evidence.”
-- Omit every Epic giveaway mention when `epic_giveaway_detected` is false or null, or when `epic_giveaway_status` is partial or unavailable, unless a partial or unavailable lookup materially limits already reported context. Never state or imply that the game was not given away, never predict future giveaways, and never use Epic giveaway history to alter Recommendation, Deal value, Product state, Confidence, or Buy timing.
+- Include Epic giveaway context in both `⚠️ Before you buy` and the price table only when `epic_giveaway_detected` is true. Deduplicate and sort every returned event date chronologically. For `epic_giveaway_scope: exact`, write: “ITAD records Epic Games Store free-giveaway date(s): [date(s)].” For `epic_giveaway_scope: related_title`, write: “ITAD records related base-title Epic Games Store free-giveaway date(s) for [title]: [date(s)]; this is not exact Steam SKU evidence.”
+- Omit every Epic giveaway mention when `epic_giveaway_detected` is false or null, or when `epic_giveaway_status` is partial or unavailable. Never state or imply that the game was not given away, never predict future giveaways, and never use Epic giveaway history to alter Recommendation, Deal value, Product state, Confidence, or Buy timing.
 
 ## Review and fit rules
 
@@ -197,5 +197,5 @@ Read this file completely immediately before composing each report. Treat the En
 - Place reliable Markdown links next to supported claims, prioritizing current product issues, operational support or shutdowns, and Early Access updates or roadmaps. Prefer direct topics or announcements. Never invent or reconstruct URLs.
 - Enforce the exact runtime `report_language` across every buyer-facing heading, label, status, table, explanation, limitation, evidence summary, and question. Translate or paraphrase foreign evidence rather than inserting raw foreign sentences.
 - Preserve official titles, company and personal names, URLs, currencies, and necessary established acronyms. Use the resolved localized title when available, otherwise the official original. Localize ordinary template and genre terms idiomatically; retain navigation emoji when renderable. Audit the report line by line.
-- End with exactly three distinct, compact, action-oriented questions, one per line and no more than 12 English words each. Derive them dynamically from findings, disagreements, uncertainty, or gaps.
+- End with exactly three distinct, compact, action-oriented questions, one per line and no more than 12 whitespace-delimited words each; keep equivalently compact in languages without word boundaries. Derive them dynamically from findings, disagreements, uncertainty, or gaps.
 - Offer only MCP-supported review, forum, event-comment, or metadata exploration. Offer development or roadmap exploration only for verified Early Access; for full releases, offer operational-support exploration only when continued service materially affects purchase. Do not repeat answered questions or offer price research, alerts, external research, benchmarks, or monitoring.

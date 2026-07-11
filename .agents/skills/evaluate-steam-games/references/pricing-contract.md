@@ -22,17 +22,17 @@ Epic Games Store giveaway history is a separate informational exception. It is n
 
 The script resolves the Steam app and associated Steam packages in one ITAD lookup. Require the current Steam offer to match regional Steam AppDetails currency plus initial and final minor-unit amounts exactly. Prefer the matching app identity. Only when it does not match, accept a base-price package from Steam purchase options. Accept multiple matching packages only when they resolve to one ITAD identity; otherwise mark standalone pricing ambiguous. Never choose by response order or title.
 
-Query store low and history for the exactly matched identity, or the sole distinct identity when current overview is unavailable. When multiple identities remain without an exact match, mark low and history unavailable rather than guessing. Query bundle history for every distinct resolved identity and deduplicate by ITAD bundle ID.
+Query store low and history for the exactly matched identity, or the sole distinct identity when current overview is unavailable. When multiple identities remain without an exact match, mark low and history unavailable rather than guessing. Query bundle history for every distinct resolved identity and use the script's deduplicated output.
 
 ## Independent evidence statuses
 
 - When `price_status` is `available`, use `current_price`; `regular_price` and `discount_percent` may independently be null.
-- When `price_status` is `unavailable`, preserve `reason`, mark current price, regular price, and discount unavailable, and continue. If exactly one identity was resolved, current-overview failure does not suppress a valid Steam low or history result.
+- When `price_status` is `unavailable`, preserve `reason`, mark current price, regular price, and discount unavailable, and continue. If exactly one identity was resolved, a non-rate-limit current-overview failure does not suppress a valid Steam low or history result.
 - Use `historical_low_price` only when `steam_low_status` is `available`; use `steam_low_timestamp` as its date. Compare it with current price only when `steam_low_comparison_status` is `available`.
 - Preserve `steam_low_reason`, `steam_low_message`, and `steam_low_retry_after` when the low is unavailable. Preserve `steam_low_comparison_reason` and `steam_low_comparison_message` when comparison fails. Use `current_price_unavailable` when a low exists without current price.
-- After product lookup, current price, Steam low, low comparison, Steam history, bundles, and subscriptions fail independently. A shared ITAD rate limit or unresolved identity may suppress dependent signals.
-- Epic giveaway lookup fails independently after a direct Steam app ITAD identity is resolved, or after a Steam-matched ITAD identity is selected when no direct app identity exists. Preserve `epic_giveaway_status`, `epic_giveaway_reason`, `epic_giveaway_message`, and `epic_giveaway_retry_after`. Never treat an empty, partial, or failed Epic result as evidence that no giveaway occurred.
-- For `itad_rate_limited`, honor `retry_after` when practical and retry once. Treat other ITAD failures as non-fatal. Never invent missing price evidence.
+- After product lookup, current price, Steam low, low comparison, Steam history, bundles, and subscriptions normally fail independently. A shared ITAD rate limit, missing Steam metadata, or an unresolved or ambiguous identity may suppress dependent signals.
+- Epic giveaway lookup has its own status after a direct Steam app ITAD identity is resolved, or after a Steam-matched ITAD identity is selected when no direct app identity exists. Missing Steam metadata, unresolved or ambiguous identity, or an earlier rate limit can prevent the lookup. Preserve `epic_giveaway_status`, `epic_giveaway_reason`, `epic_giveaway_message`, and `epic_giveaway_retry_after`. Never treat an empty, partial, or failed Epic result as evidence that no giveaway occurred.
+- ITAD helpers do not retry automatically. For `itad_rate_limited`, honor an exposed `retry_after` when practical and rerun the checker once. Treat other ITAD failures as non-fatal. Never invent missing price evidence.
 
 ## Report field mappings and timing judgments
 
@@ -43,8 +43,8 @@ Map buyer-facing fields exactly:
 | Now | `current_price`; otherwise Unavailable |
 | Regular price | `regular_price`; otherwise Unavailable |
 | Discount | `discount_percent`; otherwise Unavailable |
-| Steam recorded low | `historical_low_price` with `steam_low_timestamp`; otherwise Unavailable |
-| Compared with recorded low | `steam_low_comparison_status`; equal = Matches, lower = Establishes a new low, higher = Above, otherwise Unavailable |
+| Steam recorded low | `historical_low_price` when `steam_low_status` is available; include `steam_low_timestamp` when non-null, otherwise mark only the date Unavailable |
+| Compared with recorded low | When `steam_low_comparison_status` is available, compare `current_price.amount` with `historical_low_price.amount`: equal = Matches, lower = Establishes a new low, higher = Above; otherwise Unavailable |
 | Exact-low recurrence | `exact_low_pattern`; map explicit `insufficient` to Insufficient and null to Unavailable |
 | Recurring realistic sale level | `recurring_sale_price`; map null to None found only when Steam history and regular price are available, otherwise Unavailable |
 | Sustained list-price change | `list_price_change`; map explicit types to matching states and null to Unavailable |
@@ -87,7 +87,7 @@ Use only ITAD IDs mapped from the direct `app/<appid>` product and Steam AppDeta
 Interpret the primary fields as follows:
 
 - `subscription_status: available` means the US response was valid. `subscriptions` may be empty; an empty list is not a buyer-facing finding and must produce no subscription content in the report. It never establishes that the game is absent from every subscription service.
-- `subscription_status: partial` means valid records were retained but one or more records were malformed, expired, or conflicting. Preserve `subscription_reason`, `subscription_message`, and `subscription_errors`.
+- `subscription_status: partial` means the response completed with one or more malformed, expired, or conflicting records; any valid records were retained. Preserve `subscription_reason`, `subscription_message`, and `subscription_errors`.
 - `subscription_status: unavailable` means no safe identity was resolved or the request failed. Preserve `subscription_reason`, `subscription_message`, and `subscription_retry_after`.
 - `subscription_country` is always `US`; `subscription_errors` identifies `US` for every error.
 
@@ -115,4 +115,4 @@ Never suggest that a game may be given away again in the future.
 
 ## Shared request budget
 
-Treat ITAD's 1,000 requests per rolling five minutes as one API-key budget across workers, wishlist handoffs, and concurrent runs. For each game estimate `6 + A` normal requests, where `A` is the number of distinct ITAD identities resolved from Steam app and package products: one product lookup, one Steam-filtered overview, one Steam store low, one Steam price history, one Epic giveaway history request, one US subscription request, and one bundle-history request per identity. Allow up to `A` additional active-bundle requests only for missing or malformed expiry values, and up to three additional requests for deterministic related-title giveaway fallback. Regional Steam AppDetails identity validation does not consume ITAD quota. Include known prior consumption, reserve a safety margin, and never assign each worker a separate allowance.
+Treat ITAD's 1,000 requests per rolling five minutes as one API-key budget across workers, wishlist handoffs, and concurrent runs. For each game estimate `6 + A` normal requests, where `A` is the number of distinct ITAD identities resolved from Steam app and package products: one product lookup, one Steam-filtered overview, one Steam store low, one Steam price history, one Epic giveaway history request, one US subscription request, and one bundle-history request per identity. Allow up to `A` additional active-bundle requests only when returned records or expiry data cannot determine availability, and up to three additional requests for deterministic related-title giveaway fallback. Regional Steam AppDetails identity validation does not consume ITAD quota. Include known prior consumption, reserve a safety margin, and never assign each worker a separate allowance.

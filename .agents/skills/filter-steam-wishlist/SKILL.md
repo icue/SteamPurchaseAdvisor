@@ -1,11 +1,11 @@
 ---
 name: filter-steam-wishlist
-description: List and filter a user's public Steam wishlist by current Steam Store sale status, Steam Store historical-low status, Steam Early Access, full-release state, Steam Demo availability, unreleased-game state, and pricing country, then resolve localized Steam titles using the report country. Accept a SteamID64, numeric Steam profile URL, custom Steam profile URL, or exact custom profile ID. Use when the user asks to list, show, find, or filter wishlist games; asks which wishlist games are on sale, at historical lows, in Early Access, fully released, unreleased/upcoming, or have a demo; or asks to analyze wishlist games before handing selected app IDs to the sibling evaluate-steam-games skill. Requires a resolvable Steam profile and public wishlist; gracefully preserves requested release-state and demo-state filters when ITAD price data is unavailable.
+description: Filter a public Steam wishlist by Steam Store sale or historical-low state, release state, Steam Demo availability, and pricing country; localize titles and optionally hand selected app IDs to evaluate-steam-games. Use to list or filter a wishlist, find its on-sale, historical-low, unreleased, Early Access, full-release, or demo games, or analyze selected wishlist games. Accept SteamID64, numeric or custom profile URLs, and exact custom profile IDs; requires a resolvable profile with a public wishlist.
 ---
 
 # Filter Steam Wishlist
 
-Select games from a public Steam wishlist, localize titles, and hand IDs to `evaluate-steam-games` only for analysis. Do not check MCP readiness; this skill does not use that server. Price filtering covers only the Steam Store, excluding third-party key sellers.
+Filter a public Steam wishlist and localize its titles. Hand selected IDs to `evaluate-steam-games` only for analysis. Do not check MCP readiness; this skill does not use that server. Limit price filtering to the Steam Store, excluding third-party key sellers.
 
 ## Protect repository state during execution
 
@@ -14,42 +14,34 @@ Select games from a public Steam wishlist, localize titles, and hand IDs to `eva
 - Keep temporary state outside the repository. If repository-local state is unavoidable, use one uniquely named, tracked path; remove it on success, failure, or cancellation after verifying the cleanup target and report any residue.
 - Run bundled scripts with Python 3 and `-B`. Do not install dependencies into the repository.
 
-## Resolve paths and configuration
-
-Resolve paths relative to this `SKILL.md`:
-
-- Wishlist script: `scripts/get_wishlist_appids.py`
-- Repository root: three directories above this skill directory
-- Config status helper: `<repo-root>/.agents/lib/steam_purchase_advisor/config_status.py`
-- Config update helper: `<repo-root>/.agents/lib/steam_purchase_advisor/update_config.py`
-- Steam identity helper: `<repo-root>/.agents/lib/steam_purchase_advisor/steam_identity.py`
-- Title resolver: `<repo-root>/.agents/lib/steam_purchase_advisor/resolve_steam_titles.py`
-- User config: `<repo-root>/config.json`
-
-At the start of every wishlist request, run:
-
-```text
-python -B <repo-root>/.agents/lib/steam_purchase_advisor/config_status.py
-```
-
 ## Follow the bundle update policy
 
-The repository root is three directories above this skill directory.
-
-At the start of the first Steam Purchase Advisor workflow in the current conversation or agent run, read and follow:
+Set `<repo-root>` to three directories above this skill directory. At the start of the first Steam Purchase Advisor workflow in the current conversation or agent run, read and follow:
 
 `<repo-root>/.agents/references/bundle-update-policy.md`
 
 Treat this policy as required workflow instructions. Do not load or apply it again when the current context shows that a sibling Steam Purchase Advisor skill already followed the bundle update policy.
 
+## Resolve paths and configuration
+
+Resolve the wishlist script at `scripts/get_wishlist_appids.py` relative to this `SKILL.md`, shared helpers under `<repo-root>/.agents/lib/steam_purchase_advisor/`, and user config at `<repo-root>/config.json`.
+
+After the first-workflow update-policy gate above, run this at the start of every wishlist request:
+
+```text
+python -B <repo-root>/.agents/lib/steam_purchase_advisor/config_status.py
+```
+
 The helper exposes only configuration presence, field errors, countries, and whether the ITAD key exists. Use it even in unfiltered mode. When all required fields are valid, stay silent about configuration and do not run the update helper. Never open `config.json` or expose `itad_api_key`. Request-supplied profile or country values override config only for that request; never persist them automatically.
+
+If `config_error` is non-null, stop. Request overrides and the update helper cannot bypass or repair an unreadable file, invalid JSON, or a non-object root because the wishlist script, title resolver, and update helper must parse the file first. Report the concise error and ask the user to repair or remove `config.json` manually; never open or overwrite it.
 
 ## Guide first-use configuration
 
-When `config.json` is absent or a relevant field is missing or invalid:
+When `config_error` is null and `config.json` is absent or a relevant field is missing or invalid:
 
 1. Explain in the user's language that the file is local and Git-ignored. Ask only for what the request needs:
-   - `steam_id`: required unless this request supplies a SteamID64, a `/profiles/<SteamID64>` URL, an `/id/<custom-id>` URL, or an exact custom profile ID; the wishlist must be public.
+   - `steam_id`: required unless this request supplies one of the profile identifiers accepted below; the wishlist must be public.
    - `report_country`: required for title localization; use an uppercase ISO 3166-1 alpha-2 code and ask for a language when the country is multilingual.
    - `pricing_country`: required only for an active price filter.
    - `itad_api_key`: optional; without it, `on-sale` and `historical-low` filtering are unavailable. Return the wishlist with `--price-state any` while preserving any explicit release-state and demo-state filters, and state that price filtering was not applied.
@@ -74,19 +66,20 @@ For an ITAD key, direct the user to `https://isthereanydeal.com/apps/` to regist
 
 ## Resolve the Steam profile and require a public wishlist
 
-- Accept a 17-digit SteamID64, `https://steamcommunity.com/profiles/<SteamID64>`, `https://steamcommunity.com/id/<custom-id>`, or an exact bare custom ID such as `your-custom-id`.
+- Accept a 17-digit SteamID64; a Steam Community `/profiles/<SteamID64>` or `/id/<custom-id>` URL using HTTP, HTTPS, or no scheme; or an exact bare custom ID such as `your-custom-id`.
 - Treat a bare nonnumeric value only as an exact custom profile ID, never as a display-name search.
-- Pass request-supplied input to `--steam-profile`. The script extracts numeric profile URLs locally and resolves custom IDs through Steam Community, then validates the returned SteamID64.
+- If the identity helper already resolved the request input, pass its numeric result to `--steam-profile`. Otherwise pass the original accepted input; the wishlist script extracts numeric profile URLs locally, resolves custom IDs through Steam Community, and validates the returned SteamID64. Follow the first-use rules above for persistence.
 - If no profile identifier is available, stop and explain the accepted forms in the user's language.
 - If resolution fails, give the concise reason and offer `https://steamid.io/lookup/` for manual lookup, followed by the resulting SteamID64 in chat. Do not imply Valve affiliation.
-- After resolving a request-supplied identifier, use the numeric ID for the current request. Follow the first-use rules above for any persistence decision.
 - If the script returns `wishlist_unavailable`, stop and give its concise, non-sensitive reason.
 - Treat a successful empty JSON array as an empty public wishlist.
 - If Steam returns no usable items field, ask the user to verify the SteamID64 and wishlist visibility; do not report an empty wishlist.
 
 ## Select filters
 
-Map price intent independently:
+Map each dimension independently, apply only explicitly requested filters, and AND-combine them.
+
+Price intent:
 
 | Price intent | Argument |
 | --- | --- |
@@ -94,7 +87,7 @@ Map price intent independently:
 | Currently on sale | `--price-state on-sale` |
 | At the Steam Store historical low | `--price-state historical-low` |
 
-Map release intent independently:
+Release intent:
 
 | Release intent | Argument |
 | --- | --- |
@@ -103,7 +96,7 @@ Map release intent independently:
 | Early Access | `--release-state early-access` |
 | Full release | `--release-state full-release` |
 
-Map demo intent independently:
+Demo intent:
 
 | Demo intent | Argument |
 | --- | --- |
@@ -126,13 +119,11 @@ Demo semantics: Filtering is based only on the Steam AppDetails `demos` field. W
 
 `--steam-id` remains a backward-compatible alias for `--steam-profile`.
 
-Apply only explicitly requested filters and AND-combine the three dimensions.
-
 Sale and historical-low filters restrict results to Steam Store deals (`shop_id=61`, `vouchers=false`). The `historical-low` state compares each Steam deal's current price against its per-store low, not a cross-store historical low.
 
-When `price-state` is `any`, ITAD configuration is not required. Pass `--country` only when `price-state != "any"`.
+When `price-state` is `any`, do not require ITAD configuration or pass `--country`.
 
-For price filtering, pass `pricing_country` to Steam AppDetails as `cc`; never pass a currency or perform conversion. The script uses bounded retries and at most four concurrent requests. It exact-matches Steam currency and initial/final minor-unit amounts against ITAD, preferring `app/<appid>` and accepting base-price packages only when they resolve unambiguously to one identity. It omits ambiguous or unmatched products and never selects by response order or title.
+For price filtering, pass `pricing_country` to Steam AppDetails as `cc`; treat it as a regional selector, never pass a currency, convert currencies, or reuse another country's result. The script exact-matches Steam currency and initial/final minor-unit amounts against ITAD, preferring `app/<appid>` and accepting base-price packages only when they resolve unambiguously to one identity. It omits ambiguous or unmatched products and never selects by response order or title.
 
 Missing `price_overview` means unpriced and not on sale; a complete undiscounted price is also not on sale. Malformed currency or minor-unit amounts produce `price_data_unavailable` with reason `steam_price_metadata_malformed` and no partial price-filtered result.
 
@@ -159,16 +150,14 @@ python -B <repo-root>/.agents/lib/steam_purchase_advisor/resolve_steam_titles.py
 Price filtering (`on-sale` and `historical-low`) requires `itad_api_key` and `pricing_country`.
 
 - If the key is configured but the country is missing or invalid, ask for an uppercase two-letter country code and pass `--country <CC>`.
-- If a price-filtered run returns `price_data_unavailable` because of a missing or invalid ITAD key, ITAD authentication or network failure, malformed regional price metadata, or rate limit, explain that current price, discount, and historical-low data are unavailable. Honor `Retry-After` once when practical.
-- Rerun with `--price-state any` after an unresolved ITAD failure, preserving the exact selected `--release-state` and `--demo-state` selections. State prominently that the price filter was not applied and never describe the fallback as price-filtered.
+- If a price-filtered run returns `price_data_unavailable` because of missing or invalid configuration, an ITAD request, authentication, network, response, or rate-limit failure, or malformed regional Steam price metadata, explain that current price, discount, and historical-low data are unavailable. Honor `Retry-After` once when practical.
+- Rerun with `--price-state any` after any unresolved `price_data_unavailable`, preserving the exact selected `--release-state` and `--demo-state` selections. State prominently that the price filter was not applied and never describe the fallback as price-filtered.
 - Present fallback list requests through the title resolver.
 
 Release-state filtering uses Steam Store metadata independently of ITAD. When it returns `release_state_data_unavailable`, do not rerun without `--release-state`, do not treat unknown metadata as full release, and do not present a partial release-state result.
 
-## Preserve regional meaning and request limits
-
-Treat country codes as regional price selectors, not currency codes. Never convert currencies or apply one country's result to another.
+## Preserve request limits
 
 Treat ITAD's 1,000 requests per rolling five minutes as one shared API-key budget. ITAD is used only when price-state is on-sale or historical-low; price-state any uses no ITAD requests, including release-state-only and demo-state-only filtering. Let P be the number of distinct app and eligible base-package products discovered for wishlist games that Steam reports as discounted. Estimate a price-filtered run's upper bound as 2 * ceil(P / 200) ITAD requests: one product-lookup pass and one price pass. Reserve a safety margin, honor rate limits, and pass known prior consumption to evaluate-steam-games on handoff.
 
-The script fetches AppDetails at most once per original wishlist AppID when any metadata-backed filter is active and reuses that snapshot across price, release, and demo selectors. All-`any` filtering performs no AppDetails fetch. Combined filters still use a single AppDetails snapshot. Release-only and demo-only requests require neither an ITAD key nor `pricing_country`.
+Start one AppDetails fetch operation per original wishlist AppID when any metadata filter is active, using at most four concurrent operations with bounded retries. Reuse each resulting snapshot across combined filters; all-`any` starts no AppDetails fetches.
