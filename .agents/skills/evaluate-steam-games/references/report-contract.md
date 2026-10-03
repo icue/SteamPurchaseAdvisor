@@ -133,11 +133,11 @@ Read this file completely immediately before composing each report. Treat the En
 
 | Evidence | Coverage |
 |---|---|
-| **Review population** | ... total / Unknown |
+| **Review population** | ... Steam-reported matching total and positive/negative counts / Unknown |
 | **Retrieval mode** | Full / Proportional recent sentiment sample / Balanced recent sentiment sample |
 | **Reviews retrieved** | ... total or positive/negative corpus counts |
 | **Languages observed** | ... |
-| **Review limitations** | [Sampling, corpus, population comparison, or other material limitation.] |
+| **Review limitations** | [Sampling, corpus stop reasons, matching-count discrepancies, snapshot freshness, or other material limitation.] |
 | **Forum coverage** | [Sections and material inspected; partial failures.] |
 | **Price coverage** | Steam Store-only via IsThereAnyDeal for [country] / Unavailable — [reason] |
 | **Steam history** | Available — [`sale_episode_count`] / Unavailable — [reason] |
@@ -171,6 +171,8 @@ Read this file completely immediately before composing each report. Treat the En
 
 ## Review and fit rules
 
+- Use preflight matching counts for population coverage and saved-record aggregates for inspected reviews. Distinguish them from Steam's score summary. A completed corpus may be capped or stopped by a missing cursor; describe full traversal as exhaustive only under the checks in `SKILL.md`, and disclose material count or freshness gaps.
+- Retrieval includes all purchase sources, off-topic activity, and refunded reviews. Do not exclude or reweight reviews based on refund status; a missing `refunded` value is unknown. Playtime is recorded in minutes. Convert it explicitly if presenting hours.
 - Preserve four evidence groups internally: strengths and weaknesses in positive reviews, and weaknesses and strengths in negative reviews. Render them respectively as What players love, Even fans admit, What players criticize, and Even critics concede.
 - Attach Strong, Moderate, or Limited evidence only when recurrence, recency, cross-language agreement, and higher-playtime observations support that qualitative evidence judgment. These labels describe evidence, not quality.
 - Convert each material theme into a player or buyer consequence. Claim exact counts only when counted in retrieved material.

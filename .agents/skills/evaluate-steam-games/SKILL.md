@@ -54,10 +54,12 @@ For an ITAD key, direct the user to `https://isthereanydeal.com/apps/` to regist
 
 ## Gate all work on MCP readiness
 
-Perform this gate once before ITAD queries or per-game workers.
+Complete this gate once per evaluation before review preflight, ITAD queries, corpus creation, or per-game workers.
 
-1. Confirm that a connected Steam Review and Forum MCP advertises `get_steam_game_info`; probe one resolved app ID and reuse its metadata. A returned `game_info` record with missing or null app metadata is not a server outage.
-2. If the tool is missing or the probe fails from transport, connection, or timeout, read and follow [the MCP setup procedure](references/mcp-setup.md) completely. If readiness remains unavailable or configuration is declined, stop without querying ITAD or producing a report.
+1. Call `get_server_info` with no arguments (`{}`). Its `name` and `version` identify the currently running MCP server process. Require a valid semantic version of at least **1.1.0**; compare versions semantically, not as strings. Use the reported version as the compatibility check.
+2. If `get_server_info` is missing, the call fails, the version is absent or invalid, or it is below the minimum, stop evaluation. Report the observed version or verification failure and the required minimum, then read and follow [the MCP setup procedure](references/mcp-setup.md) completely. Continue only after reconnecting and repeating this gate successfully.
+3. After the version check passes, confirm that the MCP advertises `get_steam_game_info`; probe one resolved app ID and reuse its metadata. A returned `game_info` record with missing or null app metadata is not a server outage.
+4. If the metadata tool is missing or the probe fails from transport, connection, or timeout, read and follow the MCP setup procedure. If readiness remains unavailable or configuration is declined, stop without review preflight, ITAD queries, corpus creation, per-game workers, or a report.
 
 After readiness, obtain or reuse the `game_info` object from `get_steam_game_info` once per game and derive exactly one release state before preflight or workers:
 
@@ -80,14 +82,14 @@ Resolve titles together:
 python -B <repo-root>/.agents/lib/steam_purchase_advisor/resolve_steam_titles.py --appids <appid> [<appid> ...] --report-country <CC> [--language <steam-language>]
 ```
 
-Prefer Steam's selected-language title; otherwise preserve the publisher's original. Never machine-translate titles. Review retrieval is independent of report language: always use `language: "all"` and report only languages observed in the retrieved evidence.
+Prefer Steam's selected-language title; otherwise preserve the publisher's original. Never machine-translate titles. Review retrieval is independent of report language: always use `languages: ["all"]` and report only languages observed in the retrieved evidence. Each returned review's `language` remains a scalar metadata field.
 
 ## Preflight review volume and choose modes
 
 Run coordinator-level preflight after country and title resolution, before ITAD, corpora, or analysis workers.
 
-1. For each app ID call `get_steam_review` with `filter: "recent"`, `language: "all"`, `review_type: "all"`, `purchase_type: "all"`, `num_per_page: 1`, `filter_offtopic_activity: 0`, `fetch_all: false`, and `include_review_metadata: false`.
-2. Record `game_reviews.query_summary.total_reviews`, `game_reviews.query_summary.total_positive`, and `game_reviews.query_summary.total_negative`; record each as unknown when absent, malformed, or the call fails. Treat the sentiment breakdown as known only when both polarity counts are known non-negative integers and their sum is positive.
+1. For each app ID call `get_steam_review` three times with `review_type` respectively `"all"`, `"positive"`, and `"negative"`. Keep `filter: "recent"`, `languages: ["all"]`, `purchase_type: "all"`, `cursor: "*"`, `num_per_page: 1`, `filter_offtopic_activity: false`, `fetch_all: false`, and `include_review_metadata: false` identical across the calls.
+2. Record each response's `game_reviews.total_matching` as respectively `total_reviews`, `total_positive`, or `total_negative`; record unknown when absent, not a non-negative integer, or the call fails. Do not substitute `query_summary` score totals for filtered matching counts; score fields are available only on the first mixed-sentiment page and missing fields are not zero. Treat the sentiment breakdown as known only when both polarity counts are valid, their sum is positive, and it equals `total_reviews` when that count is known. If counts disagree, disclose the inconsistency and make proportional allocation unavailable. These are Steam-reported matching counts, not a fixed-time snapshot.
 3. Select `full` automatically for a known `total_reviews` at or below 2,000.
 4. For every game above 2,000 or with unknown `total_reviews`, require the user to choose one review mode:
    - `full`: retrieve all matching reviews.
@@ -119,30 +121,34 @@ Apply every rule in that contract. Treat ITAD failures as non-fatal. When the ke
 
 ### 2. Analyze reviews
 
-Use the coordinator-selected mode and `language: "all"`.
+Use the coordinator-selected mode and `languages: ["all"]`. Pass only parameters advertised by the connected tools; review input schemas reject unknown keys. Recent traversal has no implicit date window, so full mode covers historical reviews as well as recent ones.
 
 #### Full mode
 
-1. Call `create_steam_review_corpus` with app ID, `language: "all"`, `review_type: "all"`, `purchase_type: "all"`, `max_reviews: null`, `traversal_mode: "recent"`, `include_review_metadata: true`, and `include_offtopic_activity: true`.
+1. Call `create_steam_review_corpus` with app ID, `languages: ["all"]`, `review_type: "all"`, `purchase_type: "all"`, `max_reviews: null`, `traversal_mode: "recent"`, `include_review_metadata: true`, and `include_offtopic_activity: true`.
 2. Poll `get_steam_review_corpus_status` to completion or failure.
 3. Use `aggregate_steam_review_corpus` for overall, positive, negative, trend, and observed-language counts.
 4. Page through `query_steam_review_corpus` with bounded `limit` and increasing `offset` until every stored review is processed.
-5. Call the analysis exhaustive only when the uncapped corpus has `status: "completed"` and `progress.total_reviews_exported` is consistent with `progress.total_reviews_expected` and the available preflight population.
+5. Require an uncapped corpus with `status: "completed"`, `progress.stopped_reason: "exhausted"`, and every stored review processed before calling traversal exhaustive. Compare `progress.total_reviews_exported` with `progress.total_reviews_expected` and the available preflight population; disclose unknown or mismatched counts and do not claim exact population coverage when they cannot be reconciled. `completed` or `corpus_complete: true` alone does not establish exhaustive retrieval; a cap or missing cursor can also complete a job.
 
 #### Sampled modes
 
-For either sampled mode, use the coordinator-calculated positive and negative quotas. For each nonzero quota, create a separate corpus with `language: "all"`, the matching `review_type`, `purchase_type: "all"`, `max_reviews` equal to that polarity's quota, `traversal_mode: "recent"`, `include_review_metadata: true`, and `include_offtopic_activity: true`; create no corpus for a zero quota. Poll every corpus to completion or failure, aggregate each separately, and page through every stored review.
+For either sampled mode, use the coordinator-calculated positive and negative quotas. For each nonzero quota, create a separate corpus with `languages: ["all"]`, the matching `review_type`, `purchase_type: "all"`, `max_reviews` equal to that polarity's quota, `traversal_mode: "recent"`, `include_review_metadata: true`, and `include_offtopic_activity: true`; create no corpus for a zero quota. Poll every corpus to completion or failure, aggregate each separately, and page through every stored review. Record each stop reason; `max_reviews` is expected when a quota is reached and does not mean the polarity's population was exhausted.
 
 - For `proportional-recent`, treat the result as a recent sentiment-stratified sample with proportional allocation, never as a random sample. The quota ratio comes from preflight population counts; infer neither population rating nor theme prevalence from the retrieved positive-to-negative ratio. Report population sentiment counts or shares only from recorded preflight totals. State that a small minority-polarity quota limits discovery coverage.
 - For `balanced-recent`, use every available review when either polarity has fewer reviews than its quota and never transfer unused quota. Treat the result as a recent sentiment-stratified sample with balanced allocation, never as a random or proportional sample. The corpus counts are deliberately reweighted for strength and issue discovery; never interpret cross-polarity raw counts as population voice, rating, or prevalence.
 
 For every mode:
 
+- All review fetches share one request lane and rate-limit cooldown. `running` can mean queued; `waiting` is resumable cooldown, not terminal failure. Honor the UTC `next_retry_at` before polling again, retain the same corpus ID, and never create extra corpora to bypass the queue or cooldown. Direct `STEAM_REVIEW_RATE_LIMITED` errors also carry `next_retry_at`.
+- Review corpora require schema 2. For `UNSUPPORTED_CORPUS_VERSION` or `not_found`, recreate the affected corpus with the same approved mode and parameters; report repeated errors instead of recreating indefinitely. Treat failed jobs, `INVALID_STEAM_REVIEW_RESPONSE`, and `MISSING_REVIEW_METADATA` as unavailable or partial evidence, never as a successful empty corpus. Query and aggregate results cover only committed chunks.
+- Completed corpora are saved snapshots; status, queries, and aggregates do not refresh them. Create a new corpus for a new evaluation. Retention defaults to 24 hours from the last manifest save and completed reads do not extend it; Steam may cache anonymous responses for up to 10 minutes. State material freshness limits and do not promise a simultaneous multi-page snapshot.
 - Query at least `review`, `voted_up`, `language`, `timestamp_created`, and `author.playtime_at_review`.
+- Playtime values and thresholds are minutes. Retain refunded reviews without exclusion or reweighting; `refunded` is optional evidence and `null` means unknown. If helpfulness is inspected, `weighted_vote_score` is numeric; it is not a population or theme-frequency weight.
 - Maintain four evidence groups: strengths and weaknesses in positive reviews, and weaknesses and strengths in negative reviews.
 - Weight recurring, recent, cross-language, and higher-playtime observations over anecdotes; translate or paraphrase into the report language.
 - Attach `strong`, `moderate`, or `limited` evidence only when supported by those factors. These labels measure evidence, not quality.
-- Report total/positive/negative population counts or unknown, exact mode, requested sample size and quotas when sampled, retrieved counts, observed languages, failures, and material limitations. `language: "all"` does not guarantee every language appears in a sample.
+- Report total/positive/negative population counts or unknown, exact mode, requested sample size and quotas when sampled, retrieved counts, stop reasons, observed languages, failures, and material limitations. `languages: ["all"]` does not guarantee every language appears in a sample.
 - Claim exact theme counts only when counted in retrieved material. In sampled modes, do not extrapolate retrieved theme counts to the full population.
 - When a sampled polarity has a zero quota, state explicitly that no reviews from that polarity were inspected and do not infer themes for that polarity.
 
